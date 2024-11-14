@@ -1,10 +1,10 @@
 use parabuild::Parabuilder;
 
 fn main() {
-    let project_path = "tests/example_project";     // your project path
-    let workspaces_path = "workspaces";             // where to store the workspaces, executables, etc.
-    let template_path = "src/main.cpp.template";    // template file in the project
-    let build_path = "build/main";                  // target executable file
+    let project_path = "tests/example_project"; // your project path
+    let workspaces_path = "workspaces"; // where to store the workspaces, executables, etc.
+    let template_path = "src/main.cpp.template"; // template file in the project
+    let build_path = "build/main"; // target executable file
     let build_command = r#"
     cmake -B build -S .
     "#;

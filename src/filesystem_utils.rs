@@ -1,12 +1,12 @@
 use fs_extra;
-use std::path::Path;
 use ignore;
+use std::path::Path;
 
 #[allow(dead_code)]
-pub fn copy_dir<P, Q>(from: P, to: Q)  -> Result<(), fs_extra::error::Error>
-where 
+pub fn copy_dir<P, Q>(from: P, to: Q) -> Result<(), fs_extra::error::Error>
+where
     P: AsRef<Path>,
-    Q: AsRef<Path>
+    Q: AsRef<Path>,
 {
     let mut options = fs_extra::dir::CopyOptions::new();
     options.overwrite = true;
@@ -16,16 +16,18 @@ where
 }
 
 pub fn copy_dir_with_ignore<P, Q>(from: P, to: Q) -> Result<(), std::io::Error>
-where 
+where
     P: AsRef<Path>,
-    Q: AsRef<Path>
+    Q: AsRef<Path>,
 {
     for entry in ignore::WalkBuilder::new(&from).git_ignore(true).build() {
         match entry {
             Ok(ref entry) => {
                 let path = entry.path();
-                if path.is_file(){
-                    let relative_path = path.strip_prefix(from.as_ref()).expect("Failed to strip prefix");
+                if path.is_file() {
+                    let relative_path = path
+                        .strip_prefix(from.as_ref())
+                        .expect("Failed to strip prefix");
                     let destination = to.as_ref().join(relative_path);
                     if let Some(parent) = destination.parent() {
                         println!("Creating parent directory: {:?}", parent);
@@ -33,7 +35,7 @@ where
                     }
                     std::fs::copy(path, destination).expect("Failed to copy file");
                 }
-            },
+            }
             Err(e) => {
                 eprintln!("Error: {}", e);
             }
@@ -45,9 +47,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
     use serial_test::serial;
-    use std::io::{Write, Seek};
+    use std::io::{Seek, Write};
+    use std::time::Instant;
 
     static EXAMPLE_PROJECT: &str = "tests/example_project";
     static EXAMPLE_PROJECT_COPY: &str = "tests/example_project_copy";
@@ -88,9 +90,9 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_multithreaded_copy_dir_with_ignore(){
+    fn test_multithreaded_copy_dir_with_ignore() {
         const NUM_THREADS: usize = 16;
-        fn multithreaded_clean(){
+        fn multithreaded_clean() {
             let mut handles = vec![];
             for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
                 let handle = std::thread::spawn(move || {
@@ -110,7 +112,6 @@ mod tests {
         file.write_all(b"0").unwrap();
         file.flush().unwrap();
 
-
         multithreaded_clean();
         let start = Instant::now();
         let mut handles = vec![];
@@ -126,14 +127,20 @@ mod tests {
             handle.join().unwrap();
         }
         let duration = start.elapsed();
-        println!("Time elapsed in multithreaded copy_dir_with_ignore() is: {:?}", duration);
+        println!(
+            "Time elapsed in multithreaded copy_dir_with_ignore() is: {:?}",
+            duration
+        );
         multithreaded_clean();
         let start2 = Instant::now();
         for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
             copy_dir_with_ignore(&source, &destination).unwrap();
         }
         let duration2 = start2.elapsed();
-        println!("Time elapsed in single-threaded copy_dir_with_ignore() is: {:?}", duration2);
+        println!(
+            "Time elapsed in single-threaded copy_dir_with_ignore() is: {:?}",
+            duration2
+        );
         multithreaded_clean();
 
         fs_extra::file::remove(huge_file).unwrap();

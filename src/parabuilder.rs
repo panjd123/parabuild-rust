@@ -37,7 +37,11 @@ impl Parabuilder {
         let template_file = template_file.as_ref().to_path_buf();
         let template_output_file = template_file.with_extension("");
         let target_executable_file = target_executable_file.as_ref().to_path_buf();
-        let target_executable_file_base =target_executable_file.file_name().unwrap().to_string_lossy().to_string();
+        let target_executable_file_base = target_executable_file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         Self {
             project_path,
             workspaces_path,
