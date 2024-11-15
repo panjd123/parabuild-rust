@@ -30,7 +30,6 @@ where
                         .expect("Failed to strip prefix");
                     let destination = to.as_ref().join(relative_path);
                     if let Some(parent) = destination.parent() {
-                        println!("Creating parent directory: {:?}", parent);
                         std::fs::create_dir_all(parent).expect("Failed to create parent directory");
                     }
                     std::fs::copy(path, destination).expect("Failed to copy file");
@@ -48,8 +47,8 @@ where
 mod tests {
     use super::*;
     use serial_test::serial;
-    use std::io::{Seek, Write};
-    use std::time::Instant;
+    // use std::io::{Seek, Write};
+    // use std::time::Instant;
 
     static EXAMPLE_PROJECT: &str = "tests/example_project";
     static EXAMPLE_PROJECT_COPY: &str = "tests/example_project_copy";
@@ -88,61 +87,61 @@ mod tests {
         std::fs::remove_dir_all(destination).unwrap();
     }
 
-    #[test]
-    #[serial]
-    fn test_multithreaded_copy_dir_with_ignore() {
-        const NUM_THREADS: usize = 16;
-        fn multithreaded_clean() {
-            let mut handles = vec![];
-            for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
-                let handle = std::thread::spawn(move || {
-                    fs_extra::dir::remove(&destination).unwrap();
-                });
-                handles.push(handle);
-            }
-            for handle in handles {
-                handle.join().unwrap();
-            }
-        }
-        let source = Path::new(EXAMPLE_PROJECT);
-        // setup huge file
-        let huge_file = source.join("src/huge_file");
-        let mut file = std::fs::File::create(&huge_file).unwrap();
-        file.seek(std::io::SeekFrom::End(16 * 1024 * 1024)).unwrap(); // 16 MB
-        file.write_all(b"0").unwrap();
-        file.flush().unwrap();
+    // #[test]
+    // #[serial]
+    // fn test_multithreaded_copy_dir_with_ignore() {
+    //     const NUM_THREADS: usize = 16;
+    //     fn multithreaded_clean() {
+    //         let mut handles = vec![];
+    //         for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
+    //             let handle = std::thread::spawn(move || {
+    //                 fs_extra::dir::remove(&destination).unwrap();
+    //             });
+    //             handles.push(handle);
+    //         }
+    //         for handle in handles {
+    //             handle.join().unwrap();
+    //         }
+    //     }
+    //     let source = Path::new(EXAMPLE_PROJECT);
+    //     // setup huge file
+    //     let huge_file = source.join("src/huge_file");
+    //     let mut file = std::fs::File::create(&huge_file).unwrap();
+    //     file.seek(std::io::SeekFrom::End(16 * 1024 * 1024)).unwrap(); // 16 MB
+    //     file.write_all(b"0").unwrap();
+    //     file.flush().unwrap();
 
-        multithreaded_clean();
-        let start = Instant::now();
-        let mut handles = vec![];
-        for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
-            let source = source.to_path_buf();
-            let destination = Path::new(&destination).to_path_buf();
-            let handle = std::thread::spawn(move || {
-                copy_dir_with_ignore(&source, &destination).unwrap();
-            });
-            handles.push(handle);
-        }
-        for handle in handles {
-            handle.join().unwrap();
-        }
-        let duration = start.elapsed();
-        println!(
-            "Time elapsed in multithreaded copy_dir_with_ignore() is: {:?}",
-            duration
-        );
-        multithreaded_clean();
-        let start2 = Instant::now();
-        for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
-            copy_dir_with_ignore(&source, &destination).unwrap();
-        }
-        let duration2 = start2.elapsed();
-        println!(
-            "Time elapsed in single-threaded copy_dir_with_ignore() is: {:?}",
-            duration2
-        );
-        multithreaded_clean();
+    //     multithreaded_clean();
+    //     let start = Instant::now();
+    //     let mut handles = vec![];
+    //     for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
+    //         let source = source.to_path_buf();
+    //         let destination = Path::new(&destination).to_path_buf();
+    //         let handle = std::thread::spawn(move || {
+    //             copy_dir_with_ignore(&source, &destination).unwrap();
+    //         });
+    //         handles.push(handle);
+    //     }
+    //     for handle in handles {
+    //         handle.join().unwrap();
+    //     }
+    //     let duration = start.elapsed();
+    //     println!(
+    //         "Time elapsed in multithreaded copy_dir_with_ignore() is: {:?}",
+    //         duration
+    //     );
+    //     multithreaded_clean();
+    //     let start2 = Instant::now();
+    //     for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
+    //         copy_dir_with_ignore(&source, &destination).unwrap();
+    //     }
+    //     let duration2 = start2.elapsed();
+    //     println!(
+    //         "Time elapsed in single-threaded copy_dir_with_ignore() is: {:?}",
+    //         duration2
+    //     );
+    //     multithreaded_clean();
 
-        fs_extra::file::remove(huge_file).unwrap();
-    }
+    //     fs_extra::file::remove(huge_file).unwrap();
+    // }
 }

@@ -1,6 +1,6 @@
 # parabuild-rust
 
-This is a Rust tool that helps you compile complex (single file) projects in parallel, such as some C++ projects that heavily use templates (when you cannot achieve the best performance through make - j).
+This is a Rust tool that helps you compile complex (single file) projects in parallel, such as some C++ projects that heavily use templates (when you cannot achieve the best performance through `make -j`).
 
 ## Quick Start
 
@@ -11,15 +11,15 @@ We use [handlebars templating language](https://handlebarsjs.com/) to generate s
 ```cpp
 #include <iostream>
 
-#define N {{N}}
-
 template <int n>
-void print() {
+void print()
+{
     std::cout << n << std::endl;
 }
 
-int main() {
-    print<N>();
+int main()
+{
+    print<{{N}}>();
     return 0;
 }
 ```
@@ -28,45 +28,28 @@ Main body:
 
 ```rust
 use parabuild::Parabuilder;
+use serde_json::{json, Value as JsonValue};
 
 fn main() {
-    let project_path = "tests/example_project";     // your project path
-    let workspaces_path = "workspaces";             // where to store the workspaces, executables, etc.
-    let template_path = "src/main.cpp.template";    // template file in the project
-    let build_path = "build/main";                  // target executable file
-    let build_command = r#"
-    cmake -B build -S .
-    "#;
-    let run_command = r#"
-    cmake --build build --target all
-    "#;
-    let thread_num = 1;
-    let mut parabuilder = Parabuilder::new(
-        project_path,
-        workspaces_path,
-        template_path,
-        build_path,
-        build_command,
-        run_command,
-        thread_num,
-    );
-    let datas = vec![
-        serde_json::json!({"N": "10"}),
-        serde_json::json!({"N": "20"}),
-    ];
-    parabuilder.add_datas(datas);
+    let project_path = "tests/example_project"; // your project path
+    let workspaces_path = "workspaces"; // where to store the workspaces, executables, etc.
+    let template_path = "src/main.cpp.template"; // template file in the project
+    let build_path = "build/main"; // target executable file
+    let datas = vec![json!({"N": "10"}), json!({"N": "20"})];
+    let mut parabuilder =
+        Parabuilder::new(project_path, workspaces_path, template_path, build_path);
+    parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    parabuilder.run().unwrap();
-    println!("Check the executable files in workspaces/executable");
-    // std::fs::remove_dir_all("workspaces").unwrap();
+    let run_data: JsonValue = parabuilder.run().unwrap();
+    println!("{:?}", run_data);
+    // Array [Object {"data": Object {"N": String("10")}, "stdout": String("10\n")}, Object {"data": Object {"N": String("20")}, "stdout": String("20\n")}]
 }
 ```
-
-Then you can find `main_0`, `main_0.json`, `main_1`, `main_1.json` in the `workspaces/executable` directory, which are the executables and the corresponding json data files.
 
 ## Features
 
 - Use handlebars template language to generate source file.
 - Ignore `.gitignore` files in the project, which may speed up the copying process.
-- TODO: Support multi-threading.
+- Support multi-threading compilation/executing, these two parts can share threads, meaning they can be executed immediately after compilation, or they can be separated. For example, four threads can be used for compilation and one thread for execution. This is suitable for scenarios where only one executable should to be active in the system, such as when testing GPU performance. In this case, multiple CPU threads compile in the background while one CPU thread is responsible for execution.
+- TODO: Support `force exclusive run`, which means only one executable thread is running, no compilation thread is running.
 - TODO: Support multiple template files.

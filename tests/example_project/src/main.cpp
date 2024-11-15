@@ -1,13 +1,16 @@
 #include <iostream>
-
-#define N 42
+#include <fstream>
 
 template <int n>
-void print() {
+void print()
+{
     std::cout << n << std::endl;
+    std::ofstream file("output.txt");
+    file << n << std::endl;
 }
 
-int main() {
-    print<N>();
+int main()
+{
+    print<42>();
     return 0;
 }

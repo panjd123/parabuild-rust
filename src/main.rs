@@ -1,33 +1,17 @@
 use parabuild::Parabuilder;
+use serde_json::{json, Value as JsonValue};
 
 fn main() {
     let project_path = "tests/example_project"; // your project path
     let workspaces_path = "workspaces"; // where to store the workspaces, executables, etc.
     let template_path = "src/main.cpp.template"; // template file in the project
     let build_path = "build/main"; // target executable file
-    let build_command = r#"
-    cmake -B build -S .
-    "#;
-    let run_command = r#"
-    cmake --build build --target all
-    "#;
-    let thread_num = 1;
-    let mut parabuilder = Parabuilder::new(
-        project_path,
-        workspaces_path,
-        template_path,
-        build_path,
-        build_command,
-        run_command,
-        thread_num,
-    );
-    let datas = vec![
-        serde_json::json!({"N": "10"}),
-        serde_json::json!({"N": "20"}),
-    ];
-    parabuilder.add_datas(datas);
+    let datas = vec![json!({"N": "10"}), json!({"N": "20"})];
+    let mut parabuilder =
+        Parabuilder::new(project_path, workspaces_path, template_path, build_path);
+    parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    parabuilder.run().unwrap();
-    println!("Check the executable files in workspaces/executable");
-    // std::fs::remove_dir_all("workspaces").unwrap();
+    let run_data: JsonValue = parabuilder.run().unwrap();
+    println!("{:?}", run_data);
+    // Array [Object {"data": Object {"N": String("10")}, "stdout": String("10\n")}, Object {"data": Object {"N": String("20")}, "stdout": String("20\n")}]
 }
