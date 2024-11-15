@@ -3,6 +3,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
 use serde_json::{json, Value as JsonValue};
 use std::error::Error;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -51,7 +52,7 @@ impl Parabuilder {
         cmake -B build -S .
         "#;
         let compile_bash_script = r#"
-        cmake --build build --target all
+        cmake --build build --target all -- -B
         "#;
         let build_workers = 1;
         let run_workers = -1;
@@ -239,11 +240,12 @@ impl Parabuilder {
         }
         let data_queue_receiver = self.data_queue_receiver.as_ref().unwrap();
         for (i, data) in data_queue_receiver.iter() {
-            let template_output = std::fs::File::create(&template_output_path)
+            let mut template_output = std::fs::File::create(&template_output_path)
                 .expect(format!("Failed to create {:?}", template_output_path).as_str());
             handlebars
-                .render_to_write("tpl", &data, template_output)
+                .render_to_write("tpl", &data, &template_output)
                 .expect(format!("Failed to render {:?}", template_output_path).as_str());
+            template_output.flush().unwrap();
             Command::new("bash")
                 .arg("-c")
                 .arg(&self.compile_bash_script)
@@ -307,11 +309,12 @@ impl Parabuilder {
             let run_func = self.run_func_data;
             let handle = std::thread::spawn(move || {
                 for (i, data) in data_queue_receiver.iter() {
-                    let template_output = std::fs::File::create(&template_output_path)
+                    let mut template_output = std::fs::File::create(&template_output_path)
                         .expect(format!("Failed to create {:?}", template_output_path).as_str());
                     handlebars
-                        .render_to_write("tpl", &data, template_output)
+                        .render_to_write("tpl", &data, &template_output)
                         .expect(format!("Failed to render {:?}", template_output_path).as_str());
+                    template_output.flush().unwrap();
                     Command::new("bash")
                         .arg("-c")
                         .arg(&compile_bash_script)
@@ -383,11 +386,12 @@ impl Parabuilder {
             let executable_queue_sender_clone = executable_queue_sender.clone();
             let handle = std::thread::spawn(move || {
                 for (i, data) in data_queue_receiver.iter() {
-                    let template_output = std::fs::File::create(&template_output_path)
+                    let mut template_output = std::fs::File::create(&template_output_path)
                         .expect(format!("Failed to create {:?}", template_output_path).as_str());
                     handlebars
-                        .render_to_write("tpl", &data, template_output)
+                        .render_to_write("tpl", &data, &template_output)
                         .expect(format!("Failed to render {:?}", template_output_path).as_str());
+                    template_output.flush().unwrap();
                     Command::new("bash")
                         .arg("-c")
                         .arg(&compile_bash_script)
@@ -463,17 +467,6 @@ mod tests {
     use super::*;
     // use std::time::Instant;
     use serde_json::json;
-    use std::path::Path;
-
-    const EXAMPLE_PROJECT: &str = "tests/example_project";
-    const EXAMPLE_TEMPLATE_FILE: &str = "src/main.cpp.template";
-    const EXAMPLE_TARGET_EXECUTABLE_FILE: &str = "build/main";
-    const EXAMPLE_INIT_BASH_SCRIPT: &str = r#"
-        cmake -B build -S .
-        "#;
-    const EXAMPLE_COMPILE_BASH_SCRIPT: &str = r#"
-        cmake --build build --target all
-        "#;
 
     fn run_func(
         workspace_path: &PathBuf,
@@ -501,253 +494,129 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_singlethreaded_parabuild_without_run() {
-        let datas = vec![json!({"N": "10"}), json!({"N": "20"})];
-        let workspaces_path =
-            Path::new("tests/workspaces_test_singlethreaded_parabuild_without_run");
-        let mut parabuild = Parabuilder::new(
-            EXAMPLE_PROJECT,
-            workspaces_path,
-            EXAMPLE_TEMPLATE_FILE,
-            EXAMPLE_TARGET_EXECUTABLE_FILE,
-        )
-        .init_bash_script(EXAMPLE_INIT_BASH_SCRIPT)
-        .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
-        .build_workers(1)
-        .run_workers(0);
-        parabuild.set_datas(datas).unwrap();
-        parabuild.init_workspace().unwrap();
-        parabuild.run().unwrap();
-        assert!(workspaces_path.join("executable/main_0").exists());
-        assert!(workspaces_path.join("executable/main_1").exists());
-        assert!(workspaces_path.join("executable/main_0.json").exists());
-        assert!(workspaces_path.join("executable/main_1.json").exists());
-        std::fs::remove_dir_all(workspaces_path).unwrap();
-    }
+    const EXAMPLE_PROJECT: &str = "tests/example_project";
+    const EXAMPLE_TEMPLATE_FILE: &str = "src/main.cpp.template";
+    const EXAMPLE_TARGET_EXECUTABLE_FILE: &str = "build/main";
+    const EXAMPLE_INIT_BASH_SCRIPT: &str = r#"
+        cmake -B build -S .
+        "#;
+    const EXAMPLE_COMPILE_BASH_SCRIPT: &str = r#"
+        cmake --build build --target all -- -B
+        "#;
 
-    #[test]
-    fn test_singlethreaded_parabuild_run() {
-        let datas = vec![json!({"N": "10"}), json!({"N": "20"})];
-        let workspaces_path = Path::new("tests/workspaces_test_singlethreaded_parabuild_run");
+    const SINGLETHREADED_N: i64 = 20;
+    const MULTITHREADED_N: i64 = 100;
+
+    fn parabuild_tester(name: &str, size: i64, build_workers: usize, run_workers: isize) {
+        let datas = (1..=size)
+            .map(|i| json!({"N": i}))
+            .collect::<Vec<JsonValue>>();
+        let workspaces_path = PathBuf::from(format!("tests/workspaces_{}", name));
         let mut parabuild = Parabuilder::new(
             EXAMPLE_PROJECT,
-            workspaces_path,
+            &workspaces_path,
             EXAMPLE_TEMPLATE_FILE,
             EXAMPLE_TARGET_EXECUTABLE_FILE,
         )
         .init_bash_script(EXAMPLE_INIT_BASH_SCRIPT)
         .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
-        .build_workers(1)
-        .run_workers(-1)
+        .build_workers(build_workers)
+        .run_workers(run_workers)
         .run_func(run_func);
         parabuild.set_datas(datas).unwrap();
         parabuild.init_workspace().unwrap();
         let run_data = parabuild.run().unwrap();
-        assert!(run_data.is_i64());
-        assert!(run_data.as_i64().unwrap() == 30);
+        if run_workers == 0 {
+            assert!(run_data.is_null());
+            for i in 0..size {
+                assert!(workspaces_path
+                    .join(format!("executable/main_{}", i))
+                    .exists());
+                assert!(workspaces_path
+                    .join(format!("executable/main_{}.json", i))
+                    .exists());
+            }
+        } else {
+            let ground_truth = (1..=size).sum::<i64>();
+            let sum = if run_workers == 1 || build_workers == 1 && run_workers == -1 {
+                assert!(run_data.is_i64());
+                run_data.as_i64().unwrap()
+            } else {
+                assert!(run_data.is_array());
+                run_data
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .fold(0, |acc, item| acc + item.as_i64().unwrap())
+            };
+            assert!(
+                sum == ground_truth,
+                "expected: {}, got: {}, run_data: {}",
+                ground_truth,
+                sum,
+                run_data
+            );
+        }
         std::fs::remove_dir_all(workspaces_path).unwrap();
+    }
+
+    #[test]
+    fn test_singlethreaded_parabuild_without_run() {
+        parabuild_tester(
+            "test_singlethreaded_parabuild_without_run",
+            SINGLETHREADED_N,
+            1,
+            0,
+        );
+    }
+
+    #[test]
+    fn test_singlethreaded_parabuild_in_place_run() {
+        parabuild_tester(
+            "test_singlethreaded_parabuild_in_place_run",
+            SINGLETHREADED_N,
+            1,
+            -1,
+        );
     }
 
     #[test]
     fn test_multithreaded_parabuild_without_run() {
-        let datas = (1..=20)
-            .map(|i| json!({"N": i}))
-            .collect::<Vec<JsonValue>>();
-        let workspaces_path =
-            Path::new("tests/workspaces_test_multithreaded_parabuild_without_run");
-        let mut parabuild = Parabuilder::new(
-            EXAMPLE_PROJECT,
-            workspaces_path,
-            EXAMPLE_TEMPLATE_FILE,
-            EXAMPLE_TARGET_EXECUTABLE_FILE,
-        )
-        .init_bash_script(EXAMPLE_INIT_BASH_SCRIPT)
-        .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
-        .build_workers(4)
-        .run_workers(0);
-        parabuild.set_datas(datas).unwrap();
-        parabuild.init_workspace().unwrap();
-        let run_data = parabuild.run().unwrap();
-        assert!(run_data.is_null());
-        assert!(workspaces_path.join("executable/main_0").exists());
-        assert!(workspaces_path.join("executable/main_0.json").exists());
-        assert!(workspaces_path.join("executable/main_1").exists());
-        assert!(workspaces_path.join("executable/main_1.json").exists());
-        assert!(workspaces_path.join("executable/main_2").exists());
-        assert!(workspaces_path.join("executable/main_2.json").exists());
-        assert!(workspaces_path.join("executable/main_3").exists());
-        assert!(workspaces_path.join("executable/main_3.json").exists());
-        assert!(workspaces_path.join("executable/main_10").exists());
-        assert!(workspaces_path.join("executable/main_10.json").exists());
-        assert!(workspaces_path.join("executable/main_11").exists());
-        assert!(workspaces_path.join("executable/main_11.json").exists());
-        std::fs::remove_dir_all(workspaces_path).unwrap();
+        parabuild_tester(
+            "test_multithreaded_parabuild_without_run",
+            MULTITHREADED_N,
+            4,
+            0,
+        );
     }
 
     #[test]
     fn test_multithreaded_parabuild_in_place_run() {
-        let datas = (1..=20)
-            .map(|i| json!({"N": i}))
-            .collect::<Vec<JsonValue>>();
-        let workspaces_path =
-            Path::new("tests/workspaces_test_multithreaded_parabuild_in_place_run");
-        fn run_func(
-            workspace_path: &PathBuf,
-            target_executable_path: &PathBuf,
-            _data: &JsonValue,
-            run_data: &mut JsonValue,
-        ) -> Result<(), Box<dyn Error>> {
-            let output = Command::new(&target_executable_path)
-                .current_dir(&workspace_path)
-                .output()
-                .unwrap();
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            if output.status.success() {
-                assert!(workspace_path.join("output.txt").exists());
-                let output_number = stdout.trim().parse::<i64>().unwrap();
-                if run_data.is_null() {
-                    *run_data = json!(output_number);
-                } else {
-                    *run_data = json!(run_data.as_i64().unwrap() + output_number);
-                }
-            } else {
-                let stderr = String::from_utf8(output.stderr).unwrap();
-                Err(format!("stderr: {}", stderr).as_str())?;
-            }
-            Ok(())
-        }
-        let mut parabuild = Parabuilder::new(
-            EXAMPLE_PROJECT,
-            workspaces_path,
-            EXAMPLE_TEMPLATE_FILE,
-            EXAMPLE_TARGET_EXECUTABLE_FILE,
-        )
-        .init_bash_script(EXAMPLE_INIT_BASH_SCRIPT)
-        .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
-        .build_workers(4)
-        .run_workers(-1)
-        .run_func(run_func);
-        parabuild.set_datas(datas).unwrap();
-        parabuild.init_workspace().unwrap();
-        let run_data = parabuild.run().unwrap();
-        assert!(run_data.is_array());
-        let ground_truth = (1..=20).sum::<i64>();
-        let sum = run_data
-            .as_array()
-            .unwrap()
-            .iter()
-            .fold(0, |acc, item| acc + item.as_i64().unwrap());
-        assert!(sum == ground_truth);
-        std::fs::remove_dir_all(workspaces_path).unwrap();
+        parabuild_tester(
+            "test_multithreaded_parabuild_in_place_run",
+            MULTITHREADED_N,
+            4,
+            -1,
+        );
     }
 
     #[test]
     fn test_multithreaded_parabui_out_of_place_single_run() {
-        let datas = (1..=20)
-            .map(|i| json!({"N": i}))
-            .collect::<Vec<JsonValue>>();
-        let workspaces_path =
-            Path::new("tests/workspaces_test_multithreaded_parabui_out_of_place_single_run");
-        fn run_func(
-            workspace_path: &PathBuf,
-            target_executable_path: &PathBuf,
-            _data: &JsonValue,
-            run_data: &mut JsonValue,
-        ) -> Result<(), Box<dyn Error>> {
-            let output = Command::new(&target_executable_path)
-                .current_dir(&workspace_path)
-                .output()
-                .unwrap();
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            if output.status.success() {
-                assert!(workspace_path.join("output.txt").exists());
-                let output_number = stdout.trim().parse::<i64>().unwrap();
-                if run_data.is_null() {
-                    *run_data = json!(output_number);
-                } else {
-                    *run_data = json!(run_data.as_i64().unwrap() + output_number);
-                }
-            } else {
-                let stderr = String::from_utf8(output.stderr).unwrap();
-                Err(format!("stderr: {}", stderr).as_str())?;
-            }
-            Ok(())
-        }
-        let mut parabuild = Parabuilder::new(
-            EXAMPLE_PROJECT,
-            workspaces_path,
-            EXAMPLE_TEMPLATE_FILE,
-            EXAMPLE_TARGET_EXECUTABLE_FILE,
-        )
-        .init_bash_script(EXAMPLE_INIT_BASH_SCRIPT)
-        .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
-        .build_workers(4)
-        .run_workers(1)
-        .run_func(run_func);
-        parabuild.set_datas(datas).unwrap();
-        parabuild.init_workspace().unwrap();
-        let run_data = parabuild.run().unwrap();
-        assert!(run_data.is_i64());
-        let ground_truth = (1..=20).sum::<i64>();
-        assert!(run_data.as_i64().unwrap() == ground_truth);
-        std::fs::remove_dir_all(workspaces_path).unwrap();
+        parabuild_tester(
+            "test_multithreaded_parabui_out_of_place_single_run",
+            MULTITHREADED_N,
+            4,
+            1,
+        );
     }
 
     #[test]
     fn test_multithreaded_parabui_out_of_place_run() {
-        let datas = (1..=20)
-            .map(|i| json!({"N": i}))
-            .collect::<Vec<JsonValue>>();
-        let workspaces_path =
-            Path::new("tests/workspaces_test_multithreaded_parabui_out_of_place_run");
-        fn run_func(
-            workspace_path: &PathBuf,
-            target_executable_path: &PathBuf,
-            _data: &JsonValue,
-            run_data: &mut JsonValue,
-        ) -> Result<(), Box<dyn Error>> {
-            let output = Command::new(&target_executable_path)
-                .current_dir(&workspace_path)
-                .output()
-                .unwrap();
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            if output.status.success() {
-                assert!(workspace_path.join("output.txt").exists());
-                let output_number = stdout.trim().parse::<i64>().unwrap();
-                if run_data.is_null() {
-                    *run_data = json!(output_number);
-                } else {
-                    *run_data = json!(run_data.as_i64().unwrap() + output_number);
-                }
-            } else {
-                let stderr = String::from_utf8(output.stderr).unwrap();
-                Err(format!("stderr: {}", stderr).as_str())?;
-            }
-            Ok(())
-        }
-        let mut parabuild = Parabuilder::new(
-            EXAMPLE_PROJECT,
-            workspaces_path,
-            EXAMPLE_TEMPLATE_FILE,
-            EXAMPLE_TARGET_EXECUTABLE_FILE,
-        )
-        .init_bash_script(EXAMPLE_INIT_BASH_SCRIPT)
-        .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
-        .build_workers(4)
-        .run_workers(2)
-        .run_func(run_func);
-        parabuild.set_datas(datas).unwrap();
-        parabuild.init_workspace().unwrap();
-        let run_data = parabuild.run().unwrap();
-        assert!(run_data.is_array());
-        let ground_truth = (1..=20).sum::<i64>();
-        let sum = run_data
-            .as_array()
-            .unwrap()
-            .iter()
-            .fold(0, |acc, item| acc + item.as_i64().unwrap());
-        assert!(sum == ground_truth);
-        std::fs::remove_dir_all(workspaces_path).unwrap();
+        parabuild_tester(
+            "test_multithreaded_parabui_out_of_place_run",
+            MULTITHREADED_N,
+            4,
+            2,
+        );
     }
 }
