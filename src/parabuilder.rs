@@ -691,7 +691,7 @@ mod tests {
         assert!(run_data.is_i64());
         let ground_truth = (1..=20).sum::<i64>();
         assert!(run_data.as_i64().unwrap() == ground_truth);
-        // std::fs::remove_dir_all(workspaces_path).unwrap();
+        std::fs::remove_dir_all(workspaces_path).unwrap();
     }
 
     #[test]
