@@ -1,6 +1,6 @@
 /target
 
-/workspaces
+/workspaces*
 /tests/workspaces*
 
 /.vscode
