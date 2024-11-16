@@ -2,10 +2,12 @@ use crate::filesystem_utils::copy_dir_with_ignore;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
 use serde_json::{json, Value as JsonValue};
+use std::env;
 use std::error::Error;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::tempdir;
 
 pub struct Parabuilder {
     project_path: PathBuf,
@@ -160,8 +162,18 @@ impl Parabuilder {
     pub fn init_workspace(&self) -> Result<(), Box<dyn Error>> {
         {
             let mut handles = vec![];
+            let mut project_path = self.project_path.clone();
+            let workspaces_path = if self.workspaces_path.is_absolute() {
+                self.workspaces_path.clone()
+            } else {
+                env::current_dir().unwrap().join(&self.workspaces_path)
+            };
+            if workspaces_path.starts_with(std::fs::canonicalize(&self.project_path).unwrap()) {
+                project_path = tempdir().unwrap().into_path();
+                copy_dir_with_ignore(&self.project_path, &project_path).unwrap();
+            }
             for destination in (0..self.build_workers).map(|i| format!("workspace_{}", i)) {
-                let source = self.project_path.clone();
+                let source = project_path.clone();
                 let destination = self.workspaces_path.join(destination);
                 let init_bash_script = self.init_bash_script.clone();
                 let handle = std::thread::spawn(move || {
@@ -467,6 +479,34 @@ mod tests {
     use super::*;
     // use std::time::Instant;
     use serde_json::json;
+
+    #[test]
+    fn test_workspaces_under_project_path() {
+        println!("{}", std::fs::canonicalize(".").unwrap().display());
+        let workspaces_path = PathBuf::from("workspaces_under_project_path");
+        let parabuilder = Parabuilder::new(
+            ".",
+            &workspaces_path,
+            "tests/example_project/src/main.cpp.template",
+            "build/main",
+        )
+        .init_bash_script(
+            r#"
+            cmake -B build -S tests/example_project
+            "#,
+        )
+        .compile_bash_script(
+            r#"
+            cmake --build build --target all -- -B
+            "#,
+        );
+        parabuilder.init_workspace().unwrap();
+        assert!(workspaces_path
+            .join("workspace_0/tests/example_project/src/main.cpp.template")
+            .exists());
+        assert!(workspaces_path.join("workspace_0/build").exists());
+        std::fs::remove_dir_all(workspaces_path).unwrap();
+    }
 
     fn run_func(
         workspace_path: &PathBuf,
