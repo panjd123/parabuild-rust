@@ -46,8 +46,7 @@ fn main() {
 }
 ```
 
-We return `compute_error_datas` to indicate the data with compilation errors. Compilation errors are common in debugging projects that heavily use templates. Our default strategy is panic, which means that `compute_error_datas` is always empty. If you want to skip these compilation error data and return them at the end, you can use `.compilation_error_handling_method(
-parabuild::CompliationErrorHandlingMethod::Collect)`.
+We return `compute_error_datas` to indicate the data with compilation errors. Compilation errors are common in debugging projects that heavily use templates. Our default strategy is panic, which means that `compute_error_datas` is always empty. If you want to skip these compilation error data and return them at the end, you can use `.compilation_error_handling_method(parabuild::CompliationErrorHandlingMethod::Collect)`.
 
 ## Features
 
