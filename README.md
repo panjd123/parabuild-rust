@@ -40,18 +40,21 @@ fn main() {
         Parabuilder::new(project_path, workspaces_path, template_path, build_path);
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    let run_data: JsonValue = parabuilder.run().unwrap();
+    let (run_data, _compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
     println!("{:?}", run_data);
     // Array [Object {"data": Object {"N": String("10")}, "stdout": String("10\n")}, Object {"data": Object {"N": String("20")}, "stdout": String("20\n")}]
 }
 ```
+
+We return `compute_error_datas` to indicate the data with compilation errors. Compilation errors are common in debugging projects that heavily use templates. Our default strategy is panic, which means that `compute_error_datas` is always empty. If you want to skip these compilation error data and return them at the end, you can use `.compilation_error_handling_method(
+parabuild::CompliationErrorHandlingMethod::Collect)`.
 
 ## Features
 
 - Use handlebars template language to generate source file.
 - Ignore `.gitignore` files in the project, which may speed up the copying process.
 - Support multi-threading compilation/executing, these two parts can share threads, meaning they can be executed immediately after compilation, or they can be separated. For example, four threads can be used for compilation and one thread for execution. This is suitable for scenarios where only one executable file should be active in the system, such as when testing GPU performance. In this case, multiple CPU threads compile in the background while one CPU thread is responsible for execution.
-- TODO: Support `force exclusive run`, which means only one executable thread is running, no compilation thread is running.
+- TODO: Support better `force exclusive run`, which means only one executable thread is running, no compilation thread is running.
 - TODO: Support multiple template files.
 
 ## Notes
