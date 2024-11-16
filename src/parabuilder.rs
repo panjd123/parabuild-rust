@@ -28,7 +28,6 @@ pub struct Parabuilder {
     project_path: PathBuf,
     workspaces_path: PathBuf,
     template_file: PathBuf,
-    template_output_file: PathBuf,
     target_executable_file: PathBuf,
     target_executable_file_base: String,
     init_bash_script: String,
@@ -40,6 +39,7 @@ pub struct Parabuilder {
     data_queue_receiver: Option<Receiver<(usize, JsonValue)>>,
     compilation_error_handling_method: CompliationErrorHandlingMethod,
     auto_gather_array_data: bool,
+    in_place_template: bool,
 }
 
 impl Parabuilder {
@@ -58,7 +58,6 @@ impl Parabuilder {
         let project_path = project_path.as_ref().to_path_buf();
         let workspaces_path = workspaces_path.as_ref().to_path_buf();
         let template_file = template_file.as_ref().to_path_buf();
-        let template_output_file = template_file.with_extension("");
         let target_executable_file = target_executable_file.as_ref().to_path_buf();
         let target_executable_file_base = target_executable_file
             .file_name()
@@ -110,7 +109,6 @@ impl Parabuilder {
             project_path,
             workspaces_path,
             template_file,
-            template_output_file,
             target_executable_file,
             target_executable_file_base,
             init_bash_script: init_bash_script.to_string(),
@@ -122,6 +120,7 @@ impl Parabuilder {
             data_queue_receiver: None,
             compilation_error_handling_method: CompliationErrorHandlingMethod::Panic,
             auto_gather_array_data: true,
+            in_place_template: false,
         }
     }
 
@@ -179,6 +178,11 @@ impl Parabuilder {
 
     pub fn auto_gather_array_data(mut self, auto_gather_array_data: bool) -> Self {
         self.auto_gather_array_data = auto_gather_array_data;
+        self
+    }
+
+    pub fn in_place_template(mut self, in_place_template: bool) -> Self {
+        self.in_place_template = in_place_template;
         self
     }
 
@@ -244,6 +248,7 @@ impl Parabuilder {
                 let destination = self.workspaces_path.join(destination);
                 let init_bash_script = self.init_bash_script.clone();
                 let compile_bash_script = self.compile_bash_script.clone();
+                let in_place_template = self.in_place_template;
                 let handle = std::thread::spawn(move || {
                     copy_dir_with_ignore(&source, &destination).unwrap();
                     Command::new("bash")
@@ -252,12 +257,14 @@ impl Parabuilder {
                         .current_dir(&destination)
                         .output()
                         .unwrap();
-                    Command::new("bash")
-                        .arg("-c")
-                        .arg(&compile_bash_script)
-                        .current_dir(&destination)
-                        .output()
-                        .unwrap();
+                    if !in_place_template {
+                        Command::new("bash")
+                            .arg("-c")
+                            .arg(&compile_bash_script)
+                            .current_dir(&destination)
+                            .output()
+                            .unwrap();
+                    }
                 });
                 handles.push(handle);
             }
@@ -340,10 +347,14 @@ impl Parabuilder {
         workspace_path: PathBuf,
         executable_queue_sender: Sender<(PathBuf, JsonValue)>,
     ) -> std::thread::JoinHandle<(JsonValue, Vec<JsonValue>)> {
-        let template_path = workspace_path.join(&self.template_file);
+        let template_path = self.project_path.join(&self.template_file);
         let target_executable_path = workspace_path.join(&self.target_executable_file);
         let compile_bash_script = self.compile_bash_script.clone();
-        let template_output_file = self.template_output_file.clone();
+        let template_output_file = if self.in_place_template {
+            self.template_file.clone()
+        } else {
+            self.template_file.with_extension("")
+        };
         let target_executable_file_base = self.target_executable_file_base.clone();
         let to_target_executable_path_dir = self.to_target_executable_path_dir.clone();
         let data_queue_receiver = self.data_queue_receiver.as_ref().unwrap().clone();
@@ -354,7 +365,7 @@ impl Parabuilder {
         let template_output_path = workspace_path.join(&template_output_file);
         let mut handlebars = Handlebars::new();
         handlebars
-            .register_template_file("tpl", &template_path)
+            .register_template_string("tpl", std::fs::read_to_string(&template_path).unwrap())
             .unwrap();
         let mut run_data = JsonValue::Null;
         let mut compile_error_datas = Vec::new();
@@ -571,9 +582,13 @@ mod tests {
 
     const EXAMPLE_PROJECT: &str = "tests/example_project";
     const EXAMPLE_TEMPLATE_FILE: &str = "src/main.cpp.template";
+    const EXAMPLE_IN_PLACE_TEMPLATE_FILE: &str = "src/main.cpp";
     const EXAMPLE_TARGET_EXECUTABLE_FILE: &str = "build/main";
     const EXAMPLE_INIT_BASH_SCRIPT: &str = r#"
         cmake -B build -S .
+        "#;
+    const EXAMPLE_IN_PLACE_INIT_BASH_SCRIPT: &str = r#"
+        cmake -B build -S . -DPROFILING=ON
         "#;
     const EXAMPLE_COMPILE_BASH_SCRIPT: &str = r#"
         cmake --build build --target all -- -B
@@ -582,7 +597,13 @@ mod tests {
     const SINGLETHREADED_N: i64 = 20;
     const MULTITHREADED_N: i64 = 100;
 
-    fn parabuild_tester(name: &str, size: i64, build_workers: usize, run_method: RunMethod) {
+    fn parabuild_tester(
+        name: &str,
+        size: i64,
+        build_workers: usize,
+        run_method: RunMethod,
+        in_place_template: bool,
+    ) {
         let mut datas = (1..=size)
             .map(|i| json!({"N": i}))
             .collect::<Vec<JsonValue>>();
@@ -592,19 +613,33 @@ mod tests {
         let mut parabuilder = Parabuilder::new(
             EXAMPLE_PROJECT,
             &workspaces_path,
-            EXAMPLE_TEMPLATE_FILE,
+            if in_place_template {
+                EXAMPLE_IN_PLACE_TEMPLATE_FILE
+            } else {
+                EXAMPLE_TEMPLATE_FILE
+            },
             EXAMPLE_TARGET_EXECUTABLE_FILE,
         )
-        .init_bash_script(EXAMPLE_INIT_BASH_SCRIPT)
+        .init_bash_script(if in_place_template {
+            EXAMPLE_IN_PLACE_INIT_BASH_SCRIPT
+        } else {
+            EXAMPLE_INIT_BASH_SCRIPT
+        })
         .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
         .build_workers(build_workers)
         .run_method(run_method)
         .run_func(run_func)
-        .compilation_error_handling_method(CompliationErrorHandlingMethod::Collect);
+        .compilation_error_handling_method(CompliationErrorHandlingMethod::Collect)
+        .in_place_template(in_place_template);
         parabuilder.set_datas(datas).unwrap();
         parabuilder.init_workspace().unwrap();
         let (run_data, compile_error_datas) = parabuilder.run().unwrap();
-        assert!(compile_error_datas == vec![error_data]);
+        assert!(
+            compile_error_datas == vec![error_data],
+            "got: {:?} {:?}",
+            run_data,
+            compile_error_datas
+        );
         if matches!(run_method, RunMethod::No) {
             assert!(run_data.is_null(), "got: {}", run_data);
             for i in 0..size {
@@ -641,6 +676,7 @@ mod tests {
             SINGLETHREADED_N,
             1,
             RunMethod::No,
+            false,
         );
     }
 
@@ -651,6 +687,7 @@ mod tests {
             SINGLETHREADED_N,
             1,
             RunMethod::InPlace,
+            false,
         );
     }
 
@@ -661,6 +698,7 @@ mod tests {
             MULTITHREADED_N,
             4,
             RunMethod::No,
+            false,
         );
     }
 
@@ -671,6 +709,7 @@ mod tests {
             MULTITHREADED_N,
             4,
             RunMethod::InPlace,
+            false,
         );
     }
 
@@ -681,6 +720,7 @@ mod tests {
             MULTITHREADED_N,
             4,
             RunMethod::OutOfPlace(1),
+            false,
         );
     }
 
@@ -691,6 +731,18 @@ mod tests {
             MULTITHREADED_N,
             4,
             RunMethod::OutOfPlace(2),
+            false,
+        );
+    }
+
+    #[test]
+    fn test_multithreaded_parabuild_out_of_place_run_in_place_template() {
+        parabuild_tester(
+            "test_multithreaded_parabuild_out_of_place_run_in_place_template",
+            MULTITHREADED_N,
+            4,
+            RunMethod::OutOfPlace(2),
+            true,
         );
     }
 }
