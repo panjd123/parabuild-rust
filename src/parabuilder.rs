@@ -9,6 +9,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::tempdir;
 
+#[derive(PartialEq, Copy, Clone)]
+pub enum CompliationErrorHandlingMethod {
+    Ignore,
+    Collect,
+    Panic,
+}
+
 pub struct Parabuilder {
     project_path: PathBuf,
     workspaces_path: PathBuf,
@@ -24,6 +31,7 @@ pub struct Parabuilder {
     run_func_data: fn(&PathBuf, &PathBuf, &JsonValue, &mut JsonValue) -> Result<(), Box<dyn Error>>,
     data_queue_receiver: Option<Receiver<(usize, JsonValue)>>,
     force_exclusive_run: bool,
+    compilation_error_handling_method: CompliationErrorHandlingMethod,
 }
 
 impl Parabuilder {
@@ -106,20 +114,25 @@ impl Parabuilder {
             run_func_data,
             data_queue_receiver: None,
             force_exclusive_run: false,
+            compilation_error_handling_method: CompliationErrorHandlingMethod::Panic,
         }
     }
+
     pub fn init_bash_script(mut self, init_bash_script: &str) -> Self {
         self.init_bash_script = init_bash_script.to_string();
         self
     }
+
     pub fn compile_bash_script(mut self, compile_bash_script: &str) -> Self {
         self.compile_bash_script = compile_bash_script.to_string();
         self
     }
+
     pub fn build_workers(mut self, build_workers: usize) -> Self {
         self.build_workers = build_workers;
         self
     }
+
     pub fn run_workers(mut self, run_workers: isize) -> Self {
         self.run_workers = run_workers;
         self
@@ -135,6 +148,14 @@ impl Parabuilder {
 
     pub fn force_exclusive_run(mut self, force_exclusive_run: bool) -> Self {
         self.force_exclusive_run = force_exclusive_run;
+        self
+    }
+
+    pub fn compilation_error_handling_method(
+        mut self,
+        compilation_error_handling_method: CompliationErrorHandlingMethod,
+    ) -> Self {
+        self.compilation_error_handling_method = compilation_error_handling_method;
         self
     }
 
@@ -226,18 +247,20 @@ impl Parabuilder {
         Ok(())
     }
 
-    pub fn run(&self) -> Result<JsonValue, Box<dyn Error>> {
+    pub fn run(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
         if self.build_workers == 1 && self.run_workers <= 0 {
             self.singlethreaded_run()
         } else {
             if self.force_exclusive_run {
                 assert!(self.run_workers == 1);
+                self.multithreaded_run_exclusive()
+            } else {
+                self.multithreaded_run()
             }
-            self.multithreaded_run()
         }
     }
 
-    pub fn singlethreaded_run(&self) -> Result<JsonValue, Box<dyn Error>> {
+    fn singlethreaded_run(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
         let mut handlebars = Handlebars::new();
         let workspace_path = self.workspaces_path.join("workspace_0");
         let template_path = workspace_path.join(&self.template_file);
@@ -251,6 +274,7 @@ impl Parabuilder {
             return Err("Data queue receiver is not initialized".into());
         }
         let data_queue_receiver = self.data_queue_receiver.as_ref().unwrap();
+        let mut compile_error_datas = Vec::new();
         for (i, data) in data_queue_receiver.iter() {
             let mut template_output = std::fs::File::create(&template_output_path)
                 .expect(format!("Failed to create {:?}", template_output_path).as_str());
@@ -258,13 +282,15 @@ impl Parabuilder {
                 .render_to_write("tpl", &data, &template_output)
                 .expect(format!("Failed to render {:?}", template_output_path).as_str());
             template_output.flush().unwrap();
-            Command::new("bash")
-                .arg("-c")
-                .arg(&self.compile_bash_script)
-                .current_dir(&workspace_path)
-                .output()
-                .unwrap();
-
+            if Self::handle_compile(
+                &self.compile_bash_script,
+                &workspace_path,
+                self.compilation_error_handling_method,
+                &mut compile_error_datas,
+                &data,
+            ) {
+                continue;
+            }
             if self.run_workers == 0 {
                 let to_target_executable_path_file =
                     format!("{}_{}", &self.target_executable_file_base, i);
@@ -276,7 +302,6 @@ impl Parabuilder {
                 std::fs::rename(&target_executable_path, &to_target_executable_path).unwrap();
                 std::fs::write(&to_target_executable_metadata_path, data.to_string()).unwrap();
             } else {
-                // self.run_workers == -1
                 let run_func = self.run_func_data;
                 run_func(
                     &std::fs::canonicalize(&workspace_path).unwrap(),
@@ -287,10 +312,10 @@ impl Parabuilder {
                 .unwrap();
             }
         }
-        Ok(run_data)
+        Ok((run_data, compile_error_datas))
     }
 
-    pub fn multithreaded_run(&self) -> Result<JsonValue, Box<dyn Error>> {
+    fn multithreaded_run(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
         if self.run_workers <= 0 {
             self.multithreaded_run_in_place()
         } else {
@@ -298,7 +323,7 @@ impl Parabuilder {
         }
     }
 
-    pub fn multithreaded_run_in_place(&self) -> Result<JsonValue, Box<dyn Error>> {
+    fn multithreaded_run_in_place(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
         let mut handles = vec![];
         for i in 0..self.build_workers {
             let workspace_path = self.workspaces_path.join(format!("workspace_{}", i));
@@ -319,6 +344,8 @@ impl Parabuilder {
             let run_workers = self.run_workers;
             let mut run_data = JsonValue::Null;
             let run_func = self.run_func_data;
+            let mut compile_error_datas = Vec::new();
+            let compilation_error_handling_method = self.compilation_error_handling_method.clone();
             let handle = std::thread::spawn(move || {
                 for (i, data) in data_queue_receiver.iter() {
                     let mut template_output = std::fs::File::create(&template_output_path)
@@ -327,12 +354,15 @@ impl Parabuilder {
                         .render_to_write("tpl", &data, &template_output)
                         .expect(format!("Failed to render {:?}", template_output_path).as_str());
                     template_output.flush().unwrap();
-                    Command::new("bash")
-                        .arg("-c")
-                        .arg(&compile_bash_script)
-                        .current_dir(&workspace_path)
-                        .output()
-                        .unwrap();
+                    if Self::handle_compile(
+                        &compile_bash_script,
+                        &workspace_path,
+                        compilation_error_handling_method,
+                        &mut compile_error_datas,
+                        &data,
+                    ) {
+                        continue;
+                    }
                     if run_workers == 0 {
                         let to_target_executable_path_file =
                             format!("{}_{}", &target_executable_file_base, i);
@@ -354,29 +384,36 @@ impl Parabuilder {
                         .unwrap();
                     }
                 }
-                run_data
+                (run_data, compile_error_datas)
             });
             handles.push(handle);
         }
-        let run_data_array = handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect::<Vec<JsonValue>>();
+        let (run_data_array, compile_error_datas) = handles.into_iter().fold(
+            (vec![], vec![]),
+            |(mut run_data_array, mut compile_error_datas_array), handle| {
+                let (run_data, compile_error_datas) = handle.join().unwrap();
+                run_data_array.push(run_data);
+                compile_error_datas_array.extend(compile_error_datas);
+                (run_data_array, compile_error_datas_array)
+            },
+        );
         if run_data_array.iter().all(|item| item.is_null()) {
-            return Ok(JsonValue::Null);
+            return Ok((JsonValue::Null, compile_error_datas));
         } else if run_data_array[0].is_array() {
             let mut run_data = Vec::new();
             for run_data_item in run_data_array {
                 run_data.extend(run_data_item.as_array().unwrap().iter().cloned());
             }
-            Ok(JsonValue::Array(run_data))
+            Ok((JsonValue::Array(run_data), compile_error_datas))
         } else {
             // just return array json
-            Ok(JsonValue::Array(run_data_array))
+            Ok((JsonValue::Array(run_data_array), compile_error_datas))
         }
     }
 
-    pub fn multithreaded_run_out_of_place(&self) -> Result<JsonValue, Box<dyn Error>> {
+    fn multithreaded_run_out_of_place(
+        &self,
+    ) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
         let mut build_handles = vec![];
         let (executable_queue_sender, executable_queue_receiver) = unbounded();
         for i in 0..self.build_workers {
@@ -396,6 +433,8 @@ impl Parabuilder {
             }
             let data_queue_receiver = self.data_queue_receiver.as_ref().unwrap().clone();
             let executable_queue_sender_clone = executable_queue_sender.clone();
+            let mut compile_error_datas = Vec::new();
+            let compilation_error_handling_method = self.compilation_error_handling_method.clone();
             let handle = std::thread::spawn(move || {
                 for (i, data) in data_queue_receiver.iter() {
                     let mut template_output = std::fs::File::create(&template_output_path)
@@ -404,24 +443,25 @@ impl Parabuilder {
                         .render_to_write("tpl", &data, &template_output)
                         .expect(format!("Failed to render {:?}", template_output_path).as_str());
                     template_output.flush().unwrap();
-                    Command::new("bash")
-                        .arg("-c")
-                        .arg(&compile_bash_script)
-                        .current_dir(&workspace_path)
-                        .output()
-                        .unwrap();
+                    if Self::handle_compile(
+                        &compile_bash_script,
+                        &workspace_path,
+                        compilation_error_handling_method,
+                        &mut compile_error_datas,
+                        &data,
+                    ) {
+                        continue;
+                    }
                     let to_target_executable_path_file =
                         format!("{}_{}", &target_executable_file_base, i);
                     let to_target_executable_path =
                         to_target_executable_path_dir.join(&to_target_executable_path_file);
-                    // let to_target_executable_metadata_path =
-                    //     to_target_executable_path.with_extension("json");
                     std::fs::rename(&target_executable_path, &to_target_executable_path).unwrap();
-                    // std::fs::write(&to_target_executable_metadata_path, data.to_string()).unwrap();
                     executable_queue_sender_clone
                         .send((to_target_executable_path, data))
                         .unwrap();
                 }
+                compile_error_datas
             });
             build_handles.push(handle);
         }
@@ -448,29 +488,184 @@ impl Parabuilder {
             });
             handles.push(handle);
         }
-        for handle in build_handles {
-            handle.join().unwrap();
+        let compile_error_datas = build_handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .fold(vec![], |mut acc, item| {
+                acc.extend(item);
+                acc
+            });
+        let run_data_array = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<JsonValue>>();
+        if run_data_array.iter().all(|item| item.is_null()) {
+            return Ok((JsonValue::Null, compile_error_datas));
+        } else if self.run_workers == 1 {
+            Ok((run_data_array[0].clone(), compile_error_datas))
+        } else if run_data_array[0].is_array() {
+            let mut run_data = Vec::new();
+            for run_data_item in run_data_array {
+                run_data.extend(run_data_item.as_array().unwrap().iter().cloned());
+            }
+            Ok((JsonValue::Array(run_data), compile_error_datas))
+        } else {
+            // just return array json
+            Ok((JsonValue::Array(run_data_array), compile_error_datas))
+        }
+    }
+
+    fn multithreaded_run_exclusive(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
+        let mut build_handles = vec![];
+        let (executable_queue_sender, executable_queue_receiver) = unbounded();
+        for i in 0..self.build_workers {
+            let workspace_path = self.workspaces_path.join(format!("workspace_{}", i));
+            let template_path = workspace_path.join(&self.template_file);
+            let target_executable_path = workspace_path.join(&self.target_executable_file);
+            let template_output_path = workspace_path.join(&self.template_output_file);
+            let mut handlebars = Handlebars::new();
+            handlebars
+                .register_template_file("tpl", &template_path)
+                .unwrap();
+            let compile_bash_script = self.compile_bash_script.clone();
+            let target_executable_file_base = self.target_executable_file_base.clone();
+            let to_target_executable_path_dir = self.to_target_executable_path_dir.clone();
+            if !self.data_queue_receiver.is_some() {
+                return Err("Data queue receiver is not initialized".into());
+            }
+            let data_queue_receiver = self.data_queue_receiver.as_ref().unwrap().clone();
+            let executable_queue_sender_clone = executable_queue_sender.clone();
+            let mut compile_error_datas = Vec::new();
+            let compilation_error_handling_method = self.compilation_error_handling_method.clone();
+            let handle = std::thread::spawn(move || {
+                for (i, data) in data_queue_receiver.iter() {
+                    let mut template_output = std::fs::File::create(&template_output_path)
+                        .expect(format!("Failed to create {:?}", template_output_path).as_str());
+                    handlebars
+                        .render_to_write("tpl", &data, &template_output)
+                        .expect(format!("Failed to render {:?}", template_output_path).as_str());
+                    template_output.flush().unwrap();
+                    if Self::handle_compile(
+                        &compile_bash_script,
+                        &workspace_path,
+                        compilation_error_handling_method,
+                        &mut compile_error_datas,
+                        &data,
+                    ) {
+                        continue;
+                    }
+                    let to_target_executable_path_file =
+                        format!("{}_{}", &target_executable_file_base, i);
+                    let to_target_executable_path =
+                        to_target_executable_path_dir.join(&to_target_executable_path_file);
+                    std::fs::rename(&target_executable_path, &to_target_executable_path).unwrap();
+                    executable_queue_sender_clone
+                        .send((to_target_executable_path, data))
+                        .unwrap();
+                }
+                compile_error_datas
+            });
+            build_handles.push(handle);
+        }
+        drop(executable_queue_sender);
+        let compile_error_datas = build_handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .fold(vec![], |mut acc, item| {
+                acc.extend(item);
+                acc
+            });
+        let mut handles = vec![];
+        for i in 0..self.run_workers {
+            let workspace_path = self.workspaces_path.join(format!("workspace_exe_{}", i));
+            let target_executable_path = workspace_path.join(&self.target_executable_file);
+            let run_func = self.run_func_data;
+            let mut run_data = JsonValue::Null;
+            let executable_queue_receiver = executable_queue_receiver.clone();
+            let handle = std::thread::spawn(move || {
+                for (to_target_executable_path, data) in executable_queue_receiver.iter() {
+                    std::fs::rename(&to_target_executable_path, &target_executable_path).unwrap();
+                    run_func(
+                        &std::fs::canonicalize(&workspace_path).unwrap(),
+                        &std::fs::canonicalize(&target_executable_path).unwrap(),
+                        &data,
+                        &mut run_data,
+                    )
+                    .unwrap();
+                }
+                run_data
+            });
+            handles.push(handle);
         }
         let run_data_array = handles
             .into_iter()
             .map(|handle| handle.join().unwrap())
             .collect::<Vec<JsonValue>>();
         if run_data_array.iter().all(|item| item.is_null()) {
-            return Ok(JsonValue::Null);
+            return Ok((JsonValue::Null, compile_error_datas));
         } else if self.run_workers == 1 {
-            Ok(run_data_array[0].clone())
+            Ok((run_data_array[0].clone(), compile_error_datas))
         } else if run_data_array[0].is_array() {
             let mut run_data = Vec::new();
             for run_data_item in run_data_array {
                 run_data.extend(run_data_item.as_array().unwrap().iter().cloned());
             }
-            Ok(JsonValue::Array(run_data))
+            Ok((JsonValue::Array(run_data), compile_error_datas))
         } else {
             // just return array json
-            Ok(JsonValue::Array(run_data_array))
+            Ok((JsonValue::Array(run_data_array), compile_error_datas))
         }
     }
 
+    fn handle_compile(
+        compile_bash_script: &str,
+        workspace_path: &Path,
+        compilation_error_handling_method: CompliationErrorHandlingMethod,
+        compile_error_datas: &mut Vec<JsonValue>,
+        data: &JsonValue,
+    ) -> bool {
+        let output = Command::new("bash")
+            .arg("-c")
+            .arg(&compile_bash_script)
+            .current_dir(&workspace_path)
+            .output();
+        match &output {
+            Err(_e) => {
+                if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
+                    output.unwrap();
+                } else if compilation_error_handling_method
+                    == CompliationErrorHandlingMethod::Collect
+                {
+                    compile_error_datas.push(data.clone());
+                    return true;
+                } else if compilation_error_handling_method
+                    == CompliationErrorHandlingMethod::Ignore
+                {
+                    return true;
+                }
+            }
+            Ok(output) => {
+                if !output.status.success() {
+                    if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
+                        panic!(
+                            "Compilation failed in data: {:?} with output: {:?}",
+                            data, output
+                        );
+                    } else if compilation_error_handling_method
+                        == CompliationErrorHandlingMethod::Collect
+                    {
+                        compile_error_datas.push(data.clone());
+                        return true;
+                    } else if compilation_error_handling_method
+                        == CompliationErrorHandlingMethod::Ignore
+                    {
+                        return true;
+                    }
+                }
+            }
+        };
+        return false;
+    }
     // pub fn
 }
 
@@ -548,11 +743,13 @@ mod tests {
     const MULTITHREADED_N: i64 = 100;
 
     fn parabuild_tester(name: &str, size: i64, build_workers: usize, run_workers: isize) {
-        let datas = (1..=size)
+        let mut datas = (1..=size)
             .map(|i| json!({"N": i}))
             .collect::<Vec<JsonValue>>();
+        let error_data = json!({"N": "a"});
+        datas.push(error_data.clone());
         let workspaces_path = PathBuf::from(format!("tests/workspaces_{}", name));
-        let mut parabuild = Parabuilder::new(
+        let mut parabuilder = Parabuilder::new(
             EXAMPLE_PROJECT,
             &workspaces_path,
             EXAMPLE_TEMPLATE_FILE,
@@ -562,10 +759,12 @@ mod tests {
         .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
         .build_workers(build_workers)
         .run_workers(run_workers)
-        .run_func(run_func);
-        parabuild.set_datas(datas).unwrap();
-        parabuild.init_workspace().unwrap();
-        let run_data = parabuild.run().unwrap();
+        .run_func(run_func)
+        .compilation_error_handling_method(CompliationErrorHandlingMethod::Collect);
+        parabuilder.set_datas(datas).unwrap();
+        parabuilder.init_workspace().unwrap();
+        let (run_data, compile_error_datas) = parabuilder.run().unwrap();
+        assert!(compile_error_datas == vec![error_data]);
         if run_workers == 0 {
             assert!(run_data.is_null());
             for i in 0..size {
@@ -641,9 +840,9 @@ mod tests {
     }
 
     #[test]
-    fn test_multithreaded_parabui_out_of_place_single_run() {
+    fn test_multithreaded_parabuild_out_of_place_single_run() {
         parabuild_tester(
-            "test_multithreaded_parabui_out_of_place_single_run",
+            "test_multithreaded_parabuild_out_of_place_single_run",
             MULTITHREADED_N,
             4,
             1,
@@ -651,12 +850,22 @@ mod tests {
     }
 
     #[test]
-    fn test_multithreaded_parabui_out_of_place_run() {
+    fn test_multithreaded_parabuild_out_of_place_run() {
         parabuild_tester(
-            "test_multithreaded_parabui_out_of_place_run",
+            "test_multithreaded_parabuild_out_of_place_run",
             MULTITHREADED_N,
             4,
             2,
+        );
+    }
+
+    #[test]
+    fn test_multithreaded_parabuild_exclusive_run() {
+        parabuild_tester(
+            "test_multithreaded_parabuild_exclusive_run",
+            MULTITHREADED_N,
+            4,
+            1,
         );
     }
 }
