@@ -60,7 +60,7 @@ impl Parabuilder {
         S: AsRef<Path>,
     {
         let project_path = project_path.as_ref().to_path_buf();
-        let workspaces_path = workspaces_path.as_ref().to_path_buf();
+        let workspaces_path =  workspaces_path.as_ref().to_path_buf();
         let template_file = template_file.as_ref().to_path_buf();
         let target_executable_file = target_executable_file.as_ref().to_path_buf();
         let target_executable_file_base = target_executable_file
@@ -223,68 +223,73 @@ impl Parabuilder {
     }
 
     pub fn init_workspace(&self) -> Result<(), Box<dyn Error>> {
-        {
-            let mut handles = vec![];
-            let mut project_path = self.project_path.clone();
-            let workspaces_path = if self.workspaces_path.is_absolute() {
-                self.workspaces_path.clone()
-            } else {
-                env::current_dir().unwrap().join(&self.workspaces_path)
-            };
-            let move_to_temp_dir =
-                workspaces_path.starts_with(std::fs::canonicalize(&self.project_path).unwrap());
-            if move_to_temp_dir {
-                let sp = self.mpb.add(ProgressBar::new_spinner().with_message("copying to temp dir"));
+        let workspaces_path = if self.workspaces_path.is_absolute() {
+            self.workspaces_path.clone()
+        } else {
+            env::current_dir().unwrap().join(&self.workspaces_path)
+        };
+        let mut project_path = self.project_path.clone();
+        let move_to_temp_dir =
+            workspaces_path.starts_with(std::fs::canonicalize(&self.project_path).unwrap());
+
+        let mut build_handles = vec![];
+        if move_to_temp_dir {
+            let sp = self.mpb.add(ProgressBar::new_spinner().with_message("copying to temp dir"));
+            sp.enable_steady_tick(Duration::from_millis(100));
+            project_path = tempdir().unwrap().into_path();
+            copy_dir_with_ignore(&self.project_path, &project_path).unwrap();
+            sp.finish_and_clear();
+        }
+        for (i, destination) in (0..self.build_workers).map(|i| (i, format!("workspace_{}", i))) {
+            let source = project_path.clone();
+            let destination = self.workspaces_path.join(destination);
+            let init_bash_script = self.init_bash_script.clone();
+            let mpb = self.mpb.clone();
+            let handle = std::thread::spawn(move || {
+                let sp = mpb.add(ProgressBar::new_spinner().with_message(format!("init workspace {}: copying", i)));
                 sp.enable_steady_tick(Duration::from_millis(100));
-                project_path = tempdir().unwrap().into_path();
-                copy_dir_with_ignore(&self.project_path, &project_path).unwrap();
-                sp.finish_and_clear();
-            }
-            for (i, destination) in (0..self.build_workers).map(|i| (i, format!("workspace_{}", i))) {
+                if move_to_temp_dir {
+                    copy_dir(&source, &destination).unwrap();
+                } else {
+                    copy_dir_with_ignore(&source, &destination).unwrap();
+                }
+                sp.set_message(format!("init workspace {}: init", i));
+                Command::new("bash")
+                    .arg("-c")
+                    .arg(&init_bash_script)
+                    .current_dir(&destination)
+                    .output()
+                    .unwrap();
+            });
+            build_handles.push(handle);
+        }
+
+        let out_of_place_run_workers = match self.run_method {
+            RunMethod::OutOfPlace(run_workers) => run_workers,
+            RunMethod::Exclusive => 1,
+            _ => 0,
+        };
+        let mut run_handles = vec![];
+        if out_of_place_run_workers > 0 {
+            // only compile to executable when run_workers = 0
+            std::fs::create_dir_all(self.workspaces_path.join("executable")).unwrap();
+            for (i, destination) in (0..out_of_place_run_workers).map(|i| (i, format!("workspace_exe_{}", i)))
+            {
                 let source = project_path.clone();
                 let destination = self.workspaces_path.join(destination);
                 let init_bash_script = self.init_bash_script.clone();
+                let compile_bash_script = self.compile_bash_script.clone();
+                let in_place_template = self.in_place_template;
                 let mpb = self.mpb.clone();
                 let handle = std::thread::spawn(move || {
-                    let sp = mpb.add(ProgressBar::new_spinner().with_message(format!("init workspace {}: copying", i)));
+                    let sp = mpb.add(ProgressBar::new_spinner().with_message(format!("init workspace_run {}: copying", i)));
                     sp.enable_steady_tick(Duration::from_millis(100));
                     if move_to_temp_dir {
                         copy_dir(&source, &destination).unwrap();
                     } else {
                         copy_dir_with_ignore(&source, &destination).unwrap();
                     }
-                    sp.set_message(format!("init workspace {}: init", i));
-                    Command::new("bash")
-                        .arg("-c")
-                        .arg(&init_bash_script)
-                        .current_dir(&destination)
-                        .output()
-                        .unwrap();
-                });
-                handles.push(handle);
-            }
-            for handle in handles {
-                handle.join().unwrap();
-            }
-        }
-        let out_of_place_run_workers = match self.run_method {
-            RunMethod::OutOfPlace(run_workers) => run_workers,
-            RunMethod::Exclusive => 1,
-            _ => 0,
-        };
-        if out_of_place_run_workers > 0 {
-            // only compile to executable when run_workers = 0
-            let mut handles = vec![];
-            std::fs::create_dir_all(self.workspaces_path.join("executable")).unwrap();
-            for destination in (0..out_of_place_run_workers).map(|i| format!("workspace_exe_{}", i))
-            {
-                let source = self.project_path.clone();
-                let destination = self.workspaces_path.join(destination);
-                let init_bash_script = self.init_bash_script.clone();
-                let compile_bash_script = self.compile_bash_script.clone();
-                let in_place_template = self.in_place_template;
-                let handle = std::thread::spawn(move || {
-                    copy_dir_with_ignore(&source, &destination).unwrap();
+                    sp.set_message(format!("init workspace_run {}: init", i));
                     Command::new("bash")
                         .arg("-c")
                         .arg(&init_bash_script)
@@ -300,15 +305,19 @@ impl Parabuilder {
                             .unwrap();
                     }
                 });
-                handles.push(handle);
+                run_handles.push(handle);
             }
-            for handle in handles {
-                handle.join().unwrap();
-            }
-        } else {
-            // run in the same workspace
         }
+
+        for handle in build_handles {
+            handle.join().unwrap();
+        }
+        for handle in run_handles {
+            handle.join().unwrap();
+        }
+
         std::fs::create_dir_all(&self.to_target_executable_path_dir).unwrap();
+
         Ok(())
     }
 
