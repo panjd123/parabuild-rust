@@ -1,6 +1,7 @@
 use crate::filesystem_utils::copy_dir_with_ignore;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
+use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
 use serde_json::{json, Value as JsonValue};
 use std::env;
 use std::error::Error;
@@ -40,6 +41,7 @@ pub struct Parabuilder {
     compilation_error_handling_method: CompliationErrorHandlingMethod,
     auto_gather_array_data: bool,
     in_place_template: bool,
+    enable_progress_bar: bool,
 }
 
 impl Parabuilder {
@@ -121,6 +123,7 @@ impl Parabuilder {
             compilation_error_handling_method: CompliationErrorHandlingMethod::Panic,
             auto_gather_array_data: true,
             in_place_template: false,
+            enable_progress_bar: false,
         }
     }
 
@@ -186,6 +189,11 @@ impl Parabuilder {
         self
     }
 
+    pub fn enable_progress_bar(mut self, enable_progress_bar: bool) -> Self {
+        self.enable_progress_bar = enable_progress_bar;
+        self
+    }
+
     pub fn set_datas(&mut self, datas: Vec<JsonValue>) -> Result<(), Box<dyn Error>> {
         if self.data_queue_receiver.is_some() {
             return Err("Data queue receiver is already initialized".into());
@@ -239,11 +247,17 @@ impl Parabuilder {
                 handle.join().unwrap();
             }
         }
-        if let RunMethod::OutOfPlace(run_workers) = self.run_method {
+        let out_of_place_run_workers = match self.run_method {
+            RunMethod::OutOfPlace(run_workers) => run_workers,
+            RunMethod::Exclusive => 1,
+            _ => 0,
+        };
+        if out_of_place_run_workers > 0 {
             // only compile to executable when run_workers = 0
             let mut handles = vec![];
             std::fs::create_dir_all(self.workspaces_path.join("executable")).unwrap();
-            for destination in (0..run_workers).map(|i| format!("workspace_exe_{}", i)) {
+            for destination in (0..out_of_place_run_workers).map(|i| format!("workspace_exe_{}", i))
+            {
                 let source = self.project_path.clone();
                 let destination = self.workspaces_path.join(destination);
                 let init_bash_script = self.init_bash_script.clone();
@@ -285,11 +299,47 @@ impl Parabuilder {
         let mut build_handles = vec![];
         let mut run_handles = Vec::new();
         let (executable_queue_sender, executable_queue_receiver) = unbounded();
+        let (_mpb, build_pb, run_pb) = if self.enable_progress_bar {
+            let mpb = MultiProgress::new();
+            let sty = ProgressStyle::with_template(
+                "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+            )
+            .unwrap();
+            let data_size = self.data_queue_receiver.as_ref().unwrap().len();
+            let build_pb = mpb
+                .add(ProgressBar::new(data_size as u64))
+                .with_finish(ProgressFinish::WithMessage("All builds done".into()));
+            build_pb.set_style(sty.clone());
+            build_pb.set_message("Building");
+            let run_pb = if !matches!(self.run_method, RunMethod::No) {
+                let b = mpb
+                    .add(ProgressBar::new(data_size as u64))
+                    .with_finish(ProgressFinish::WithMessage("All runs done".into()));
+                b.set_style(sty.clone());
+                if matches!(self.run_method, RunMethod::Exclusive) {
+                    b.set_message("Waiting");
+                } else {
+                    b.set_message("Running");
+                }
+                Some(b)
+            } else {
+                None
+            };
+            let mpb = Some(mpb);
+            let build_pb = Some(build_pb);
+            (mpb, build_pb, run_pb)
+        } else {
+            (None, None, None)
+        };
         let spawn_build_workers = || {
             for i in 0..self.build_workers {
                 let workspace_path = self.workspaces_path.join(format!("workspace_{}", i));
-                let build_handle =
-                    self.build_worker(workspace_path, executable_queue_sender.clone());
+                let build_handle = self.build_worker(
+                    workspace_path,
+                    executable_queue_sender.clone(),
+                    build_pb.clone(),
+                    run_pb.clone(),
+                );
                 build_handles.push(build_handle);
             }
             drop(executable_queue_sender);
@@ -298,10 +348,21 @@ impl Parabuilder {
             if let RunMethod::OutOfPlace(run_workers) = self.run_method {
                 for i in 0..run_workers {
                     let workspace_path = self.workspaces_path.join(format!("workspace_exe_{}", i));
-                    let run_handle =
-                        self.run_worker(workspace_path, executable_queue_receiver.clone());
+                    let run_handle = self.run_worker(
+                        workspace_path,
+                        executable_queue_receiver.clone(),
+                        run_pb.clone(),
+                    );
                     run_handles.push(run_handle);
                 }
+            } else if matches!(self.run_method, RunMethod::Exclusive) {
+                let workspace_path = self.workspaces_path.join("workspace_exe_0");
+                let run_handle = self.run_worker(
+                    workspace_path,
+                    executable_queue_receiver.clone(),
+                    run_pb.clone(),
+                );
+                run_handles.push(run_handle);
             }
             drop(executable_queue_receiver);
         };
@@ -315,6 +376,9 @@ impl Parabuilder {
                         compile_error_datas_array.extend(compile_error_datas);
                         compile_error_datas_array
                     });
+            if let Some(pb) = run_pb.as_ref() {
+                pb.set_message("Running");
+            }
             spawn_run_workers(); // spawn after build workers are done
             let run_data_array = run_handles
                 .into_iter()
@@ -322,7 +386,9 @@ impl Parabuilder {
                 .collect();
             self.gather_data(run_data_array, compile_error_datas)
         } else {
-            spawn_run_workers(); // spawn before build workers are done
+            if matches!(self.run_method, RunMethod::OutOfPlace(_)) {
+                spawn_run_workers(); // spawn before build workers are done
+            }
             let (mut run_data_array, compile_error_datas) = build_handles.into_iter().fold(
                 (vec![], vec![]),
                 |(mut run_data_array, mut compile_error_datas_array), handle| {
@@ -346,6 +412,8 @@ impl Parabuilder {
         &self,
         workspace_path: PathBuf,
         executable_queue_sender: Sender<(PathBuf, JsonValue)>,
+        build_pb: Option<ProgressBar>,
+        run_pb: Option<ProgressBar>,
     ) -> std::thread::JoinHandle<(JsonValue, Vec<JsonValue>)> {
         let template_path = self.project_path.join(&self.template_file);
         let target_executable_path = workspace_path.join(&self.target_executable_file);
@@ -377,14 +445,41 @@ impl Parabuilder {
                     .render_to_write("tpl", &data, &template_output)
                     .expect(format!("Failed to render {:?}", template_output_path).as_str());
                 template_output.flush().unwrap();
-                if Self::handle_compile(
-                    &compile_bash_script,
-                    &workspace_path,
-                    compilation_error_handling_method,
-                    &mut compile_error_datas,
-                    &data,
-                ) {
-                    continue;
+                let output = Command::new("bash")
+                    .arg("-c")
+                    .arg(&compile_bash_script)
+                    .current_dir(&workspace_path)
+                    .output();
+                if let Some(pb) = build_pb.as_ref() {
+                    pb.inc(1);
+                }
+                if output.is_err() || output.is_ok() && !output.as_ref().unwrap().status.success() {
+                    if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
+                        if let Ok(output) = output {
+                            panic!(
+                                "Compilation script failed in data: {:?} with output: {:?}",
+                                data, output
+                            );
+                        } else {
+                            panic!("Compilation script failed in data: {:?}", data);
+                        }
+                    } else {
+                        if let Some(pb) = run_pb.as_ref() {
+                            pb.inc(1);
+                        }
+                        if compilation_error_handling_method
+                            == CompliationErrorHandlingMethod::Collect
+                        {
+                            compile_error_datas.push(data.clone());
+                            continue;
+                        } else if compilation_error_handling_method
+                            == CompliationErrorHandlingMethod::Ignore
+                        {
+                            continue;
+                        } else {
+                            panic!("Compilation error handling method not implemented");
+                        }
+                    }
                 }
                 if matches!(run_method, RunMethod::No) {
                     let to_target_executable_path_file =
@@ -401,25 +496,33 @@ impl Parabuilder {
                         .as_str(),
                     );
                     std::fs::write(&to_target_executable_metadata_path, data.to_string()).unwrap();
-                } else if matches!(run_method, RunMethod::InPlace) {
-                    run_func(
-                        &std::fs::canonicalize(&workspace_path).unwrap(),
-                        &std::fs::canonicalize(&target_executable_path).unwrap(),
-                        &data,
-                        &mut run_data,
-                    )
-                    .unwrap();
-                } else if matches!(run_method, RunMethod::OutOfPlace(_)) {
-                    let to_target_executable_path_file =
-                        format!("{}_{}", &target_executable_file_base, i);
-                    let to_target_executable_path =
-                        to_target_executable_path_dir.join(&to_target_executable_path_file);
-                    std::fs::rename(&target_executable_path, &to_target_executable_path).unwrap();
-                    executable_queue_sender
-                        .send((to_target_executable_path, data))
-                        .unwrap();
                 } else {
-                    panic!("Run method not implemented");
+                    if matches!(run_method, RunMethod::InPlace) {
+                        run_func(
+                            &std::fs::canonicalize(&workspace_path).unwrap(),
+                            &std::fs::canonicalize(&target_executable_path).unwrap(),
+                            &data,
+                            &mut run_data,
+                        )
+                        .unwrap();
+                        if let Some(pb) = run_pb.as_ref() {
+                            pb.inc(1);
+                        }
+                    } else if matches!(run_method, RunMethod::OutOfPlace(_))
+                        || matches!(run_method, RunMethod::Exclusive)
+                    {
+                        let to_target_executable_path_file =
+                            format!("{}_{}", &target_executable_file_base, i);
+                        let to_target_executable_path =
+                            to_target_executable_path_dir.join(&to_target_executable_path_file);
+                        std::fs::rename(&target_executable_path, &to_target_executable_path)
+                            .unwrap();
+                        executable_queue_sender
+                            .send((to_target_executable_path, data))
+                            .unwrap();
+                    } else {
+                        panic!("Run method not implemented");
+                    }
                 }
             }
             (run_data, compile_error_datas)
@@ -430,6 +533,7 @@ impl Parabuilder {
         &self,
         workspace_path: PathBuf,
         executable_queue_receiver: Receiver<(PathBuf, JsonValue)>,
+        run_pb: Option<ProgressBar>,
     ) -> std::thread::JoinHandle<JsonValue> {
         let target_executable_path = workspace_path.join(&self.target_executable_file);
         let run_func = self.run_func_data;
@@ -444,6 +548,9 @@ impl Parabuilder {
                     &mut run_data,
                 )
                 .unwrap();
+                if let Some(pb) = run_pb.as_ref() {
+                    pb.inc(1);
+                }
             }
             run_data
         })
@@ -467,57 +574,6 @@ impl Parabuilder {
             Ok((JsonValue::Array(run_data_array), compile_error_datas))
         }
     }
-
-    fn handle_compile(
-        compile_bash_script: &str,
-        workspace_path: &Path,
-        compilation_error_handling_method: CompliationErrorHandlingMethod,
-        compile_error_datas: &mut Vec<JsonValue>,
-        data: &JsonValue,
-    ) -> bool {
-        let output = Command::new("bash")
-            .arg("-c")
-            .arg(&compile_bash_script)
-            .current_dir(&workspace_path)
-            .output();
-        match &output {
-            Err(_e) => {
-                if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
-                    output.unwrap();
-                } else if compilation_error_handling_method
-                    == CompliationErrorHandlingMethod::Collect
-                {
-                    compile_error_datas.push(data.clone());
-                    return true;
-                } else if compilation_error_handling_method
-                    == CompliationErrorHandlingMethod::Ignore
-                {
-                    return true;
-                }
-            }
-            Ok(output) => {
-                if !output.status.success() {
-                    if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
-                        panic!(
-                            "Compilation failed in data: {:?} with output: {:?}",
-                            data, output
-                        );
-                    } else if compilation_error_handling_method
-                        == CompliationErrorHandlingMethod::Collect
-                    {
-                        compile_error_datas.push(data.clone());
-                        return true;
-                    } else if compilation_error_handling_method
-                        == CompliationErrorHandlingMethod::Ignore
-                    {
-                        return true;
-                    }
-                }
-            }
-        };
-        return false;
-    }
-    // pub fn
 }
 
 #[cfg(test)]
@@ -731,6 +787,17 @@ mod tests {
             MULTITHREADED_N,
             4,
             RunMethod::OutOfPlace(2),
+            false,
+        );
+    }
+
+    #[test]
+    fn test_multithreaded_parabuild_exclusive_run() {
+        parabuild_tester(
+            "test_multithreaded_parabuild_exclusive_run",
+            MULTITHREADED_N,
+            4,
+            RunMethod::Exclusive,
             false,
         );
     }

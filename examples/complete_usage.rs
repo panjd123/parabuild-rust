@@ -51,10 +51,14 @@ fn main() {
             .init_bash_script(init_bash_script)
             .compile_bash_script(compile_bash_script)
             .build_workers(4)
-            .run_method(RunMethod::OutOfPlace(2)) // 4 threads compile, 1 thread run
+            .run_method(RunMethod::OutOfPlace(1)) // 4 threads compile, 1 thread run
+            // .run_method(RunMethod::Exclusive) // 4 threads compile, 1 thread run
             .compilation_error_handling_method(CompliationErrorHandlingMethod::Collect) // collect data that has compilation error
             .auto_gather_array_data(true) // when each run thread finishes, gather the data into one array when every thread returns an array
-            .run_func(run_func); // use custom run function
+            .run_func(run_func)
+            .in_place_template(false)
+            .enable_progress_bar(true);
+    // use custom run function
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
     let (run_data, compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
