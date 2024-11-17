@@ -46,7 +46,81 @@ pub struct Parabuilder {
     in_place_template: bool,
     enable_progress_bar: bool,
     mpb: MultiProgress,
+    use_cached_workspace: bool,
 }
+
+fn run_func_data_panic_on_error(
+    workspace_path: &PathBuf,
+    target_executable_path: &PathBuf,
+    data: &JsonValue,
+    run_data: &mut JsonValue,
+) -> Result<(), Box<dyn Error>> {
+    let output = Command::new(&target_executable_path)
+        .current_dir(&workspace_path)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let this_data = json! {
+        {
+            "status": output.status.code().unwrap(),
+            "stdout": stdout,
+            "stderr": stderr,
+            "data": data
+        }
+    };
+    if output.status.success() {
+        if run_data.is_null() {
+            *run_data = JsonValue::Array(vec![this_data]);
+        } else {
+            run_data.as_array_mut().unwrap().push(this_data);
+        }
+    } else {
+        Err(format!("stderr: {}", stderr).as_str())?;
+    }
+    Ok(())
+}
+
+fn run_func_data_ignore_on_error(
+    workspace_path: &PathBuf,
+    target_executable_path: &PathBuf,
+    data: &JsonValue,
+    run_data: &mut JsonValue,
+) -> Result<(), Box<dyn Error>> {
+    let output = Command::new(&target_executable_path)
+        .current_dir(&workspace_path)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let this_data = json! {
+        {
+            "status": output.status.code().unwrap(),
+            "stdout": stdout,
+            "stderr": stderr,
+            "data": data
+        }
+    };
+    if run_data.is_null() {
+        *run_data = JsonValue::Array(vec![this_data]);
+    } else {
+        run_data.as_array_mut().unwrap().push(this_data);
+    }
+    Ok(())
+}
+
+pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: fn(
+    &PathBuf,
+    &PathBuf,
+    &JsonValue,
+    &mut JsonValue,
+) -> Result<(), Box<dyn Error>> = run_func_data_panic_on_error;
+pub const IGNORE_ON_ERROR_DEFAULT_RUN_FUNC: fn(
+    &PathBuf,
+    &PathBuf,
+    &JsonValue,
+    &mut JsonValue,
+) -> Result<(), Box<dyn Error>> = run_func_data_ignore_on_error;
 
 impl Parabuilder {
     pub fn new<P, Q, R, S>(
@@ -78,39 +152,6 @@ impl Parabuilder {
         cmake --build build --target all -- -B
         "#;
         let build_workers = 1;
-        fn run_func_data(
-            workspace_path: &PathBuf,
-            target_executable_path: &PathBuf,
-            data: &JsonValue,
-            run_data: &mut JsonValue,
-        ) -> Result<(), Box<dyn Error>> {
-            let output = Command::new(&target_executable_path)
-                .current_dir(&workspace_path)
-                .output()
-                .unwrap();
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            if output.status.success() {
-                if run_data.is_null() {
-                    *run_data = JsonValue::Array(vec![json! {
-                        {
-                            "stdout": stdout,
-                            "data": data
-                        }
-                    }]);
-                } else {
-                    run_data.as_array_mut().unwrap().push(json! {
-                        {
-                            "stdout": stdout,
-                            "data": data
-                        }
-                    });
-                }
-            } else {
-                let stderr = String::from_utf8(output.stderr).unwrap();
-                Err(format!("stderr: {}", stderr).as_str())?;
-            }
-            Ok(())
-        }
         Self {
             project_path,
             workspaces_path,
@@ -122,13 +163,14 @@ impl Parabuilder {
             build_workers,
             run_method: RunMethod::Exclusive,
             to_target_executable_path_dir,
-            run_func_data,
+            run_func_data: IGNORE_ON_ERROR_DEFAULT_RUN_FUNC,
             data_queue_receiver: None,
-            compilation_error_handling_method: CompliationErrorHandlingMethod::Panic,
+            compilation_error_handling_method: CompliationErrorHandlingMethod::Collect,
             auto_gather_array_data: true,
             in_place_template: false,
             enable_progress_bar: false,
             mpb: MultiProgress::new(),
+            use_cached_workspace: false,
         }
     }
 
@@ -203,6 +245,11 @@ impl Parabuilder {
         self
     }
 
+    pub fn use_cached_workspace(mut self, use_cached_workspace: bool) -> Self {
+        self.use_cached_workspace = use_cached_workspace;
+        self
+    }
+
     pub fn set_datas(&mut self, datas: Vec<JsonValue>) -> Result<(), Box<dyn Error>> {
         if self.data_queue_receiver.is_some() {
             return Err("Data queue receiver is already initialized".into());
@@ -225,6 +272,26 @@ impl Parabuilder {
     }
 
     pub fn init_workspace(&self) -> Result<(), Box<dyn Error>> {
+        let out_of_place_run_workers = match self.run_method {
+            RunMethod::OutOfPlace(run_workers) => run_workers,
+            RunMethod::Exclusive => 1,
+            _ => 0,
+        };
+        if self.use_cached_workspace {
+            for i in 0..self.build_workers {
+                let workspace_path = self.workspaces_path.join(format!("workspace_{}", i));
+                if !workspace_path.exists() {
+                    return Err(format!("Workspace {:?} does not exist", workspace_path).into());
+                }
+            }
+            for i in 0..out_of_place_run_workers {
+                let workspace_path = self.workspaces_path.join(format!("workspace_exe_{}", i));
+                if !workspace_path.exists() {
+                    return Err(format!("Workspace {:?} does not exist", workspace_path).into());
+                }
+            }
+            return Ok(());
+        }
         let workspaces_path = if self.workspaces_path.is_absolute() {
             self.workspaces_path.clone()
         } else {
@@ -267,12 +334,6 @@ impl Parabuilder {
             });
             build_handles.push(handle);
         }
-
-        let out_of_place_run_workers = match self.run_method {
-            RunMethod::OutOfPlace(run_workers) => run_workers,
-            RunMethod::Exclusive => 1,
-            _ => 0,
-        };
         let mut run_handles = vec![];
         if out_of_place_run_workers > 0 {
             // only compile to executable when run_workers = 0
@@ -602,7 +663,7 @@ impl Parabuilder {
             return ProgressBar::hidden();
         }
         let sty = ProgressStyle::with_template(
-            "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+            "[{elapsed_precise}  ETA: {eta_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
         )
         .unwrap();
         self.mpb.add(

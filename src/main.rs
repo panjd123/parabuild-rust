@@ -63,6 +63,11 @@ struct Cli {
     /// in place template
     #[arg(long)]
     in_place_template: bool,
+
+    /// use cached workspaces, which means we only check the existence of the workspaces, and do not re-init the workspaces.
+    /// you should make sure the workspaces are correct and up-to-date.
+    #[arg(long)]
+    cache: bool,
 }
 
 fn main() {
@@ -99,7 +104,8 @@ fn main() {
         args.target_executable_file,
     )
     .in_place_template(args.in_place_template)
-    .enable_progress_bar(args.progress_bar);
+    .enable_progress_bar(args.progress_bar).
+    use_cached_workspace(args.cache);
 
     if let Some(init_bash_script) = init_bash_script {
         parabuilder = parabuilder.init_bash_script(&init_bash_script);
