@@ -1,15 +1,17 @@
 use crate::filesystem_utils::{copy_dir, copy_dir_with_ignore};
+use crate::handlebars_helper::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
 use serde_json::{json, Value as JsonValue};
+use std::borrow::Cow;
 use std::env;
 use std::error::Error;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tempfile::tempdir;
 use std::time::Duration;
+use tempfile::tempdir;
 
 #[derive(PartialEq, Copy, Clone)]
 pub enum CompliationErrorHandlingMethod {
@@ -60,7 +62,7 @@ impl Parabuilder {
         S: AsRef<Path>,
     {
         let project_path = project_path.as_ref().to_path_buf();
-        let workspaces_path =  workspaces_path.as_ref().to_path_buf();
+        let workspaces_path = workspaces_path.as_ref().to_path_buf();
         let template_file = template_file.as_ref().to_path_buf();
         let target_executable_file = target_executable_file.as_ref().to_path_buf();
         let target_executable_file_base = target_executable_file
@@ -234,20 +236,22 @@ impl Parabuilder {
 
         let mut build_handles = vec![];
         if move_to_temp_dir {
-            let sp = self.mpb.add(ProgressBar::new_spinner().with_message("copying to temp dir"));
-            sp.enable_steady_tick(Duration::from_millis(100));
+            self.add_spinner("copying to temp dir");
             project_path = tempdir().unwrap().into_path();
             copy_dir_with_ignore(&self.project_path, &project_path).unwrap();
-            sp.finish_and_clear();
         }
         for (i, destination) in (0..self.build_workers).map(|i| (i, format!("workspace_{}", i))) {
             let source = project_path.clone();
             let destination = self.workspaces_path.join(destination);
             let init_bash_script = self.init_bash_script.clone();
             let mpb = self.mpb.clone();
+            let enable_progress_bar = self.enable_progress_bar;
             let handle = std::thread::spawn(move || {
-                let sp = mpb.add(ProgressBar::new_spinner().with_message(format!("init workspace {}: copying", i)));
-                sp.enable_steady_tick(Duration::from_millis(100));
+                let sp = Self::add_spinner2(
+                    enable_progress_bar,
+                    &mpb,
+                    format!("init workspace {}: copying", i),
+                );
                 if move_to_temp_dir {
                     copy_dir(&source, &destination).unwrap();
                 } else {
@@ -273,7 +277,8 @@ impl Parabuilder {
         if out_of_place_run_workers > 0 {
             // only compile to executable when run_workers = 0
             std::fs::create_dir_all(self.workspaces_path.join("executable")).unwrap();
-            for (i, destination) in (0..out_of_place_run_workers).map(|i| (i, format!("workspace_exe_{}", i)))
+            for (i, destination) in
+                (0..out_of_place_run_workers).map(|i| (i, format!("workspace_exe_{}", i)))
             {
                 let source = project_path.clone();
                 let destination = self.workspaces_path.join(destination);
@@ -281,9 +286,13 @@ impl Parabuilder {
                 let compile_bash_script = self.compile_bash_script.clone();
                 let in_place_template = self.in_place_template;
                 let mpb = self.mpb.clone();
+                let enable_progress_bar = self.enable_progress_bar;
                 let handle = std::thread::spawn(move || {
-                    let sp = mpb.add(ProgressBar::new_spinner().with_message(format!("init workspace_run {}: copying", i)));
-                    sp.enable_steady_tick(Duration::from_millis(100));
+                    let sp = Self::add_spinner2(
+                        enable_progress_bar,
+                        &mpb,
+                        format!("init workspace_run {}: copying", i),
+                    );
                     if move_to_temp_dir {
                         copy_dir(&source, &destination).unwrap();
                     } else {
@@ -328,35 +337,16 @@ impl Parabuilder {
         let mut build_handles = vec![];
         let mut run_handles = Vec::new();
         let (executable_queue_sender, executable_queue_receiver) = unbounded();
-        let (build_pb, run_pb) = if self.enable_progress_bar {
-            let sty = ProgressStyle::with_template(
-                "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
-            )
-            .unwrap();
-            let data_size = self.data_queue_receiver.as_ref().unwrap().len();
-            let build_pb = self.mpb
-                .add(ProgressBar::new(data_size as u64))
-                .with_finish(ProgressFinish::WithMessage("All builds done".into()));
-            build_pb.set_style(sty.clone());
-            build_pb.set_message("Building");
-            let run_pb = if !matches!(self.run_method, RunMethod::No) {
-                let b = self.mpb
-                    .add(ProgressBar::new(data_size as u64))
-                    .with_finish(ProgressFinish::WithMessage("All runs done".into()));
-                b.set_style(sty.clone());
-                if matches!(self.run_method, RunMethod::Exclusive) {
-                    b.set_message("Waiting");
-                } else {
-                    b.set_message("Running");
-                }
-                Some(b)
+        let data_size = self.data_queue_receiver.as_ref().unwrap().len() as u64;
+        let build_pb = self.add_progress_bar("Building", data_size, "All builds done");
+        let run_pb = if !matches!(self.run_method, RunMethod::No) {
+            if matches!(self.run_method, RunMethod::Exclusive) {
+                self.add_progress_bar("Waiting", data_size, "All runs done")
             } else {
-                None
-            };
-            let build_pb = Some(build_pb);
-            (build_pb, run_pb)
+                self.add_progress_bar("Running", data_size, "All runs done")
+            }
         } else {
-            (None, None)
+            ProgressBar::hidden()
         };
         let spawn_build_workers = || {
             for i in 0..self.build_workers {
@@ -403,9 +393,7 @@ impl Parabuilder {
                         compile_error_datas_array.extend(compile_error_datas);
                         compile_error_datas_array
                     });
-            if let Some(pb) = run_pb.as_ref() {
-                pb.set_message("Running");
-            }
+            run_pb.set_message("Running");
             spawn_run_workers(); // spawn after build workers are done
             let run_data_array = run_handles
                 .into_iter()
@@ -439,8 +427,8 @@ impl Parabuilder {
         &self,
         workspace_path: PathBuf,
         executable_queue_sender: Sender<(PathBuf, JsonValue)>,
-        build_pb: Option<ProgressBar>,
-        run_pb: Option<ProgressBar>,
+        build_pb: ProgressBar,
+        run_pb: ProgressBar,
     ) -> std::thread::JoinHandle<(JsonValue, Vec<JsonValue>)> {
         let template_path = self.project_path.join(&self.template_file);
         let target_executable_path = workspace_path.join(&self.target_executable_file);
@@ -462,6 +450,7 @@ impl Parabuilder {
         handlebars
             .register_template_string("tpl", std::fs::read_to_string(&template_path).unwrap())
             .unwrap();
+        handlebars.register_helper("default", Box::new(default_value_helper));
         let mut run_data = JsonValue::Null;
         let mut compile_error_datas = Vec::new();
         std::thread::spawn(move || {
@@ -477,9 +466,7 @@ impl Parabuilder {
                     .arg(&compile_bash_script)
                     .current_dir(&workspace_path)
                     .output();
-                if let Some(pb) = build_pb.as_ref() {
-                    pb.inc(1);
-                }
+                build_pb.inc(1);
                 if output.is_err() || output.is_ok() && !output.as_ref().unwrap().status.success() {
                     if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
                         if let Ok(output) = output {
@@ -491,8 +478,8 @@ impl Parabuilder {
                             panic!("Compilation script failed in data: {:?}", data);
                         }
                     } else {
-                        if let Some(pb) = run_pb.as_ref() {
-                            pb.inc(1);
+                        if !matches!(run_method, RunMethod::No) {
+                            run_pb.inc(1);
                         }
                         if compilation_error_handling_method
                             == CompliationErrorHandlingMethod::Collect
@@ -532,9 +519,7 @@ impl Parabuilder {
                             &mut run_data,
                         )
                         .unwrap();
-                        if let Some(pb) = run_pb.as_ref() {
-                            pb.inc(1);
-                        }
+                        run_pb.inc(1);
                     } else if matches!(run_method, RunMethod::OutOfPlace(_))
                         || matches!(run_method, RunMethod::Exclusive)
                     {
@@ -560,7 +545,7 @@ impl Parabuilder {
         &self,
         workspace_path: PathBuf,
         executable_queue_receiver: Receiver<(PathBuf, JsonValue)>,
-        run_pb: Option<ProgressBar>,
+        run_pb: ProgressBar,
     ) -> std::thread::JoinHandle<JsonValue> {
         let target_executable_path = workspace_path.join(&self.target_executable_file);
         let run_func = self.run_func_data;
@@ -575,9 +560,7 @@ impl Parabuilder {
                     &mut run_data,
                 )
                 .unwrap();
-                if let Some(pb) = run_pb.as_ref() {
-                    pb.inc(1);
-                }
+                run_pb.inc(1);
             }
             run_data
         })
@@ -600,6 +583,51 @@ impl Parabuilder {
             // just return array json
             Ok((JsonValue::Array(run_data_array), compile_error_datas))
         }
+    }
+
+    fn add_progress_bar<S: Into<String>, F: Into<Cow<'static, str>>>(
+        &self,
+        message: S,
+        total: u64,
+        finish_message: F,
+    ) -> ProgressBar {
+        if !self.enable_progress_bar {
+            return ProgressBar::hidden();
+        }
+        let sty = ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+        )
+        .unwrap();
+        self.mpb.add(
+            ProgressBar::new(total)
+                .with_message(message.into())
+                .with_style(sty)
+                .with_finish(ProgressFinish::WithMessage(finish_message.into())),
+        )
+    }
+
+    fn add_spinner<S: Into<String>>(&self, message: S) -> ProgressBar {
+        if !self.enable_progress_bar {
+            return ProgressBar::hidden();
+        }
+        let sp = self
+            .mpb
+            .add(ProgressBar::new_spinner().with_message(message.into()));
+        sp.enable_steady_tick(Duration::from_millis(100));
+        sp
+    }
+
+    fn add_spinner2<S: Into<String>>(
+        enable_progress_bar: bool,
+        mpb: &MultiProgress,
+        message: S,
+    ) -> ProgressBar {
+        if !enable_progress_bar {
+            return ProgressBar::hidden();
+        }
+        let sp = mpb.add(ProgressBar::new_spinner().with_message(message.into()));
+        sp.enable_steady_tick(Duration::from_millis(100));
+        sp
     }
 }
 
