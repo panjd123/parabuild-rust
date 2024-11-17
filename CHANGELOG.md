@@ -2,6 +2,8 @@
 
 - Add handlebars helper: `{{default name 'default_value'}}`
 - Optimize the progress bar when init_workspace
+- Modify some default parameters
+- Add runtime output
 
 # 0.2.1
 
