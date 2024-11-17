@@ -1,3 +1,7 @@
+# 0.2.2
+
+- Optimize the progress bar when init_workspace
+
 # 0.2.1
 
 - Minor improvement in cp performance under in-place template conditions

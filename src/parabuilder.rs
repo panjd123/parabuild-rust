@@ -9,6 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::tempdir;
+use std::time::Duration;
 
 #[derive(PartialEq, Copy, Clone)]
 pub enum CompliationErrorHandlingMethod {
@@ -42,6 +43,7 @@ pub struct Parabuilder {
     auto_gather_array_data: bool,
     in_place_template: bool,
     enable_progress_bar: bool,
+    mpb: MultiProgress,
 }
 
 impl Parabuilder {
@@ -124,6 +126,7 @@ impl Parabuilder {
             auto_gather_array_data: true,
             in_place_template: false,
             enable_progress_bar: false,
+            mpb: MultiProgress::new(),
         }
     }
 
@@ -231,21 +234,26 @@ impl Parabuilder {
             let move_to_temp_dir =
                 workspaces_path.starts_with(std::fs::canonicalize(&self.project_path).unwrap());
             if move_to_temp_dir {
-                let sp = ProgressBar::new_spinner().with_message("copy to temp dir");
+                let sp = self.mpb.add(ProgressBar::new_spinner().with_message("copying to temp dir"));
+                sp.enable_steady_tick(Duration::from_millis(100));
                 project_path = tempdir().unwrap().into_path();
                 copy_dir_with_ignore(&self.project_path, &project_path).unwrap();
                 sp.finish_and_clear();
             }
-            for destination in (0..self.build_workers).map(|i| format!("workspace_{}", i)) {
+            for (i, destination) in (0..self.build_workers).map(|i| (i, format!("workspace_{}", i))) {
                 let source = project_path.clone();
                 let destination = self.workspaces_path.join(destination);
                 let init_bash_script = self.init_bash_script.clone();
+                let mpb = self.mpb.clone();
                 let handle = std::thread::spawn(move || {
+                    let sp = mpb.add(ProgressBar::new_spinner().with_message(format!("init workspace {}: copying", i)));
+                    sp.enable_steady_tick(Duration::from_millis(100));
                     if move_to_temp_dir {
                         copy_dir(&source, &destination).unwrap();
                     } else {
                         copy_dir_with_ignore(&source, &destination).unwrap();
                     }
+                    sp.set_message(format!("init workspace {}: init", i));
                     Command::new("bash")
                         .arg("-c")
                         .arg(&init_bash_script)
@@ -311,20 +319,19 @@ impl Parabuilder {
         let mut build_handles = vec![];
         let mut run_handles = Vec::new();
         let (executable_queue_sender, executable_queue_receiver) = unbounded();
-        let (_mpb, build_pb, run_pb) = if self.enable_progress_bar {
-            let mpb = MultiProgress::new();
+        let (build_pb, run_pb) = if self.enable_progress_bar {
             let sty = ProgressStyle::with_template(
                 "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
             )
             .unwrap();
             let data_size = self.data_queue_receiver.as_ref().unwrap().len();
-            let build_pb = mpb
+            let build_pb = self.mpb
                 .add(ProgressBar::new(data_size as u64))
                 .with_finish(ProgressFinish::WithMessage("All builds done".into()));
             build_pb.set_style(sty.clone());
             build_pb.set_message("Building");
             let run_pb = if !matches!(self.run_method, RunMethod::No) {
-                let b = mpb
+                let b = self.mpb
                     .add(ProgressBar::new(data_size as u64))
                     .with_finish(ProgressFinish::WithMessage("All runs done".into()));
                 b.set_style(sty.clone());
@@ -337,11 +344,10 @@ impl Parabuilder {
             } else {
                 None
             };
-            let mpb = Some(mpb);
             let build_pb = Some(build_pb);
-            (mpb, build_pb, run_pb)
+            (build_pb, run_pb)
         } else {
-            (None, None, None)
+            (None, None)
         };
         let spawn_build_workers = || {
             for i in 0..self.build_workers {
