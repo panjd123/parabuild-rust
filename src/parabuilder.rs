@@ -384,6 +384,7 @@ impl Parabuilder {
             drop(executable_queue_receiver);
         };
         spawn_build_workers();
+        drop(build_pb);
         if matches!(self.run_method, RunMethod::Exclusive) {
             let compile_error_datas =
                 build_handles
