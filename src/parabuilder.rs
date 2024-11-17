@@ -571,6 +571,10 @@ impl Parabuilder {
         run_data_array: Vec<JsonValue>,
         compile_error_datas: Vec<JsonValue>,
     ) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
+        let run_data_array: Vec<JsonValue> = run_data_array
+            .into_iter()
+            .filter(|item| !item.is_null())
+            .collect();
         if self.run_method == RunMethod::No {
             return Ok((JsonValue::Null, compile_error_datas));
         } else if self.auto_gather_array_data && run_data_array.iter().all(|item| item.is_array()) {
@@ -718,6 +722,9 @@ mod tests {
         let mut datas = (1..=size)
             .map(|i| json!({"N": i}))
             .collect::<Vec<JsonValue>>();
+        if size == 0 {
+            datas.push(json!({}));
+        }
         let error_data = json!({"N": "a"});
         datas.push(error_data.clone());
         let workspaces_path = PathBuf::from(format!("tests/workspaces_{}", name));
@@ -762,7 +769,11 @@ mod tests {
                     .exists());
             }
         } else {
-            let ground_truth = (1..=size).sum::<i64>();
+            let ground_truth = if size > 0 {
+                (1..=size).sum::<i64>()
+            } else {
+                42
+            };
             assert!(run_data.is_array());
             let sum = run_data
                 .as_array()
@@ -862,6 +873,17 @@ mod tests {
         parabuild_tester(
             "test_multithreaded_parabuild_out_of_place_run_in_place_template",
             MULTITHREADED_N,
+            4,
+            RunMethod::OutOfPlace(2),
+            true,
+        );
+    }
+
+    #[test]
+    fn test_multithreaded_parabuild_out_of_place_run_default_template() {
+        parabuild_tester(
+            "est_multithreaded_parabuild_out_of_place_run_default_template",
+            0,
             4,
             RunMethod::OutOfPlace(2),
             true,

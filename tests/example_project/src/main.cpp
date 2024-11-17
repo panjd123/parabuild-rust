@@ -14,7 +14,7 @@ int main()
 #ifndef PROFILING
     print<42>();
 #else
-    print<{{N}}>();
+    print<{{default N 42}}>();
 #endif
     return 0;
 }

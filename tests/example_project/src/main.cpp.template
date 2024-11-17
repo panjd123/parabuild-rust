@@ -11,6 +11,6 @@ void print()
 
 int main()
 {
-    print<{{N}}>();
+    print<{{default N 42}}>();
     return 0;
 }
