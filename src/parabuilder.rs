@@ -341,13 +341,15 @@ impl Parabuilder {
         let build_pb = self.add_progress_bar("Building", data_size, "All builds done");
         let run_pb = if !matches!(self.run_method, RunMethod::No) {
             if matches!(self.run_method, RunMethod::Exclusive) {
-                self.add_progress_bar("Waiting", data_size, "All runs done")
+                self.add_progress_bar("Waiting to run (exclusive)", data_size, "All runs done")
             } else {
                 self.add_progress_bar("Running", data_size, "All runs done")
             }
         } else {
             ProgressBar::hidden()
         };
+        build_pb.tick();
+        run_pb.tick();
         let spawn_build_workers = || {
             for i in 0..self.build_workers {
                 let workspace_path = self.workspaces_path.join(format!("workspace_{}", i));
