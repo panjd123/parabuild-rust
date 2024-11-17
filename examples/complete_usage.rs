@@ -9,7 +9,7 @@ fn run_func(
     target_executable_path: &PathBuf,
     _data: &JsonValue,
     run_data: &mut JsonValue,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<JsonValue, Box<dyn Error>> {
     let output = Command::new(&target_executable_path)
         .current_dir(&workspace_path)
         .output()
@@ -23,11 +23,11 @@ fn run_func(
         } else {
             *run_data = json!(run_data.as_i64().unwrap() + output_number);
         }
+        Ok(json!(output_number))
     } else {
         let stderr = String::from_utf8(output.stderr).unwrap();
-        Err(format!("stderr: {}", stderr).as_str())?;
+        Err(format!("stderr: {}", stderr).as_str())?
     }
-    Ok(())
 }
 
 fn main() {

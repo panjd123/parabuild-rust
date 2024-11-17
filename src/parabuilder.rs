@@ -39,7 +39,7 @@ pub struct Parabuilder {
     build_workers: usize,
     run_method: RunMethod,
     to_target_executable_path_dir: PathBuf,
-    run_func_data: fn(&PathBuf, &PathBuf, &JsonValue, &mut JsonValue) -> Result<(), Box<dyn Error>>,
+    run_func_data: fn(&PathBuf, &PathBuf, &JsonValue, &mut JsonValue) -> Result<JsonValue, Box<dyn Error>>,
     data_queue_receiver: Option<Receiver<(usize, JsonValue)>>,
     compilation_error_handling_method: CompliationErrorHandlingMethod,
     auto_gather_array_data: bool,
@@ -54,7 +54,7 @@ fn run_func_data_panic_on_error(
     target_executable_path: &PathBuf,
     data: &JsonValue,
     run_data: &mut JsonValue,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<JsonValue, Box<dyn Error>> {
     let output = Command::new(&target_executable_path)
         .current_dir(&workspace_path)
         .output()
@@ -71,14 +71,14 @@ fn run_func_data_panic_on_error(
     };
     if output.status.success() {
         if run_data.is_null() {
-            *run_data = JsonValue::Array(vec![this_data]);
+            *run_data = JsonValue::Array(vec![this_data.clone()]);
         } else {
-            run_data.as_array_mut().unwrap().push(this_data);
+            run_data.as_array_mut().unwrap().push(this_data.clone());
         }
     } else {
         Err(format!("stderr: {}", stderr).as_str())?;
     }
-    Ok(())
+    Ok(this_data)
 }
 
 fn run_func_data_ignore_on_error(
@@ -86,7 +86,7 @@ fn run_func_data_ignore_on_error(
     target_executable_path: &PathBuf,
     data: &JsonValue,
     run_data: &mut JsonValue,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<JsonValue, Box<dyn Error>> {
     let output = Command::new(&target_executable_path)
         .current_dir(&workspace_path)
         .output()
@@ -102,11 +102,11 @@ fn run_func_data_ignore_on_error(
         }
     };
     if run_data.is_null() {
-        *run_data = JsonValue::Array(vec![this_data]);
+        *run_data = JsonValue::Array(vec![this_data.clone()]);
     } else {
-        run_data.as_array_mut().unwrap().push(this_data);
+        run_data.as_array_mut().unwrap().push(this_data.clone());
     }
-    Ok(())
+    Ok(this_data)
 }
 
 pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: fn(
@@ -114,13 +114,13 @@ pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: fn(
     &PathBuf,
     &JsonValue,
     &mut JsonValue,
-) -> Result<(), Box<dyn Error>> = run_func_data_panic_on_error;
+) -> Result<JsonValue, Box<dyn Error>> = run_func_data_panic_on_error;
 pub const IGNORE_ON_ERROR_DEFAULT_RUN_FUNC: fn(
     &PathBuf,
     &PathBuf,
     &JsonValue,
     &mut JsonValue,
-) -> Result<(), Box<dyn Error>> = run_func_data_ignore_on_error;
+) -> Result<JsonValue, Box<dyn Error>> = run_func_data_ignore_on_error;
 
 impl Parabuilder {
     pub fn new<P, Q, R, S>(
@@ -216,7 +216,7 @@ impl Parabuilder {
 
     pub fn run_func(
         mut self,
-        run_func: fn(&PathBuf, &PathBuf, &JsonValue, &mut JsonValue) -> Result<(), Box<dyn Error>>,
+        run_func: fn(&PathBuf, &PathBuf, &JsonValue, &mut JsonValue) -> Result<JsonValue, Box<dyn Error>>,
     ) -> Self {
         self.run_func_data = run_func;
         self
@@ -614,16 +614,25 @@ impl Parabuilder {
         let target_executable_path = workspace_path.join(&self.target_executable_file);
         let run_func = self.run_func_data;
         let mut run_data = JsonValue::Null;
+        let enable_progress_bar = self.enable_progress_bar;
+        let mpb = self.mpb.clone();
         std::thread::spawn(move || {
+            let mut last_data = JsonValue::Null;
+            let sp = Self::add_spinner2(
+                enable_progress_bar,
+                &mpb,
+                serde_json::to_string_pretty(&last_data).unwrap(),
+            );
             for (to_target_executable_path, data) in executable_queue_receiver.iter() {
                 std::fs::rename(&to_target_executable_path, &target_executable_path).unwrap();
-                run_func(
+                last_data = run_func(
                     &std::fs::canonicalize(&workspace_path).unwrap(),
                     &std::fs::canonicalize(&target_executable_path).unwrap(),
                     &data,
                     &mut run_data,
                 )
                 .unwrap();
+                sp.set_message(serde_json::to_string_pretty(&last_data).unwrap());
                 run_pb.inc(1);
             }
             run_data
@@ -738,7 +747,7 @@ mod tests {
         target_executable_path: &PathBuf,
         _data: &JsonValue,
         run_data: &mut JsonValue,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<JsonValue, Box<dyn Error>> {
         let output = Command::new(&target_executable_path)
             .current_dir(&workspace_path)
             .output()
@@ -752,11 +761,11 @@ mod tests {
             } else {
                 *run_data = json!(run_data.as_i64().unwrap() + output_number);
             }
+            Ok(json!(output_number))
         } else {
             let stderr = String::from_utf8(output.stderr).unwrap();
-            Err(format!("stderr: {}", stderr).as_str())?;
+            Err(format!("stderr: {}", stderr).as_str())?
         }
-        Ok(())
     }
 
     const EXAMPLE_PROJECT: &str = "tests/example_project";
