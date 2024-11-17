@@ -1,4 +1,4 @@
-use crate::filesystem_utils::copy_dir_with_ignore;
+use crate::filesystem_utils::{copy_dir, copy_dir_with_ignore};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
@@ -228,16 +228,24 @@ impl Parabuilder {
             } else {
                 env::current_dir().unwrap().join(&self.workspaces_path)
             };
-            if workspaces_path.starts_with(std::fs::canonicalize(&self.project_path).unwrap()) {
+            let move_to_temp_dir =
+                workspaces_path.starts_with(std::fs::canonicalize(&self.project_path).unwrap());
+            if move_to_temp_dir {
+                let sp = ProgressBar::new_spinner().with_message("copy to temp dir");
                 project_path = tempdir().unwrap().into_path();
                 copy_dir_with_ignore(&self.project_path, &project_path).unwrap();
+                sp.finish_and_clear();
             }
             for destination in (0..self.build_workers).map(|i| format!("workspace_{}", i)) {
                 let source = project_path.clone();
                 let destination = self.workspaces_path.join(destination);
                 let init_bash_script = self.init_bash_script.clone();
                 let handle = std::thread::spawn(move || {
-                    copy_dir_with_ignore(&source, &destination).unwrap();
+                    if move_to_temp_dir {
+                        copy_dir(&source, &destination).unwrap();
+                    } else {
+                        copy_dir_with_ignore(&source, &destination).unwrap();
+                    }
                     Command::new("bash")
                         .arg("-c")
                         .arg(&init_bash_script)

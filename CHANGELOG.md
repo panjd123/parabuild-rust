@@ -1,3 +1,7 @@
+# 0.2.1
+
+- Minor improvement in cp performance under in-place template conditions
+
 # 0.2.0
 
 - Support in-place template rendering
