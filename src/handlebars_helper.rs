@@ -14,12 +14,7 @@ pub fn default_value_helper(
     let default = h.param(1).unwrap();
 
     if param.value().is_null() {
-        out.write(
-            default
-                .value()
-                .as_str()
-                .expect("default value is required, are you missing `` around it?"),
-        )?;
+        out.write(default.value().render().as_ref())?;
     } else {
         out.write(param.value().render().as_ref())?;
     }

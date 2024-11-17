@@ -447,10 +447,10 @@ impl Parabuilder {
 
         let template_output_path = workspace_path.join(&template_output_file);
         let mut handlebars = Handlebars::new();
+        handlebars.register_helper("default", Box::new(default_value_helper));
         handlebars
             .register_template_string("tpl", std::fs::read_to_string(&template_path).unwrap())
             .unwrap();
-        handlebars.register_helper("default", Box::new(default_value_helper));
         let mut run_data = JsonValue::Null;
         let mut compile_error_datas = Vec::new();
         std::thread::spawn(move || {
