@@ -48,6 +48,60 @@ fn main() {
 
 We return `compute_error_datas` to indicate the data with compilation errors. Compilation errors are common in debugging projects that heavily use templates. Our default strategy is panic, which means that `compute_error_datas` is always empty. If you want to skip these compilation error data and return them at the end, you can use `.compilation_error_handling_method(parabuild::CompliationErrorHandlingMethod::Collect)`.
 
+## Command Line
+
+We also provide a command line tool to compile the project. You can use `cargo install parabuild` to install it.
+
+### Quick Start
+
+```shell
+cargo run --release -- tests/example_project src/main.cpp.template build/main --data '[{"N": 10}, {"N": 20}]'
+```
+
+### Help
+
+```shell
+$ parabuild --help
+A parallel build utility for template heavy projects.
+
+Usage: parabuild [OPTIONS] <PROJECT_PATH> <TEMPLATE_PATH> <TARGET_EXECUTABLE_FILE>
+
+Arguments:
+  <PROJECT_PATH>            project path
+  <TEMPLATE_PATH>           template file in the project
+  <TARGET_EXECUTABLE_FILE>  target executable file in the project
+
+Options:
+  -w, --workspaces-path <WORKSPACES_PATH>
+          where to store the workspaces, executables, etc [default: workspaces]
+      --data <DATA>
+          json format data
+  -d, --data-file <DATA_FILE>
+          json format data file, when used together with the `--data` option, ignore this option
+  -o, --output-file <OUTPUT_FILE>
+          output the json format result to a file, default to stdout
+      --init-bash-script-file <INIT_BASH_SCRIPT_FILE>
+          init bash script file
+  -i, --init-cmake-args <INIT_CMAKE_ARGS>
+          init cmake args e.g. "-DCMAKE_BUILD_TYPE=Release", when used together with the `--init-bash-script-file` option, ignore this option
+      --compile-bash-script-file <COMPILE_BASH_SCRIPT_FILE>
+          compile bash script file
+  -t, --target <TARGET>
+          make target, when used together with the `--compile-bash-script-file` option, ignore this option
+  -p, --progress-bar
+          enable progress bar
+  -j, --build-workers <BUILD_WORKERS>
+          build workers
+  -J, --run-workers <RUN_WORKERS>
+          run workers
+      --in-place-template
+          in place template
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+```
+
 ## Features
 
 - Use handlebars template language to generate source file.
@@ -65,3 +119,7 @@ https://doc.rust-lang.org/std/time/struct.SystemTime.html
 > A measurement of the system clock, useful for talking to external entities like the file system or other processes.
 >
 > Distinct from the Instant type, this time measurement is not monotonic. This means that you can save a file to the file system, then save another file to the file system, and the second file has a SystemTime measurement earlier than the first. In other words, an operation that happens after another operation in real time may have an earlier SystemTime!
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

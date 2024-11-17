@@ -116,7 +116,7 @@ impl Parabuilder {
             init_bash_script: init_bash_script.to_string(),
             compile_bash_script: compile_bash_script.to_string(),
             build_workers,
-            run_method: RunMethod::InPlace,
+            run_method: RunMethod::Exclusive,
             to_target_executable_path_dir,
             run_func_data,
             data_queue_receiver: None,
@@ -147,8 +147,12 @@ impl Parabuilder {
             self.run_method = RunMethod::OutOfPlace(run_workers as usize);
         } else if run_workers == 0 {
             self.run_method = RunMethod::No;
-        } else if run_workers == -1 {
-            self.run_method = RunMethod::InPlace;
+        } else if run_workers < 0 {
+            if self.build_workers == -run_workers as usize {
+                self.run_method = RunMethod::InPlace;
+            } else {
+                self.run_method = RunMethod::Exclusive;
+            }
         }
         self
     }
