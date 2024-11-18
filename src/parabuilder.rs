@@ -383,8 +383,8 @@ impl Parabuilder {
                 let source = project_path.clone();
                 let destination = self.workspaces_path.join(destination);
                 let init_bash_script = self.init_bash_script.clone();
-                let compile_bash_script = self.compile_bash_script.clone();
-                let in_place_template = self.in_place_template;
+                // let compile_bash_script = self.compile_bash_script.clone();
+                // let in_place_template = self.in_place_template;
                 let mpb = self.mpb.clone();
                 let enable_progress_bar = self.enable_progress_bar;
                 let handle = std::thread::spawn(move || {
@@ -399,20 +399,20 @@ impl Parabuilder {
                         copy_dir_with_ignore(&source, &destination).unwrap();
                     }
                     sp.set_message(format!("init workspace_run {}: init", i));
-                    Command::new("bash")
+                    let output = Command::new("bash")
                         .arg("-c")
                         .arg(&init_bash_script)
                         .current_dir(&destination)
                         .output()
                         .unwrap();
-                    if !in_place_template {
-                        Command::new("bash")
-                            .arg("-c")
-                            .arg(&compile_bash_script)
-                            .current_dir(&destination)
-                            .output()
-                            .unwrap();
-                    }
+                    assert!(output.status.success());
+                    // let output = Command::new("bash")
+                    //     .arg("-c")
+                    //     .arg(&compile_bash_script)
+                    //     .current_dir(&destination)
+                    //     .output()
+                    //     .unwrap();
+                    // assert!(output.status.success());
                 });
                 run_handles.push(handle);
             }
