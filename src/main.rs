@@ -1,6 +1,9 @@
 use clap::Parser;
 use parabuild::Parabuilder;
 use serde_json::Value as JsonValue;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
 use std::{path::PathBuf, str::FromStr};
 
 #[derive(Parser)]
@@ -10,10 +13,13 @@ struct Cli {
     project_path: PathBuf,
 
     /// template file in the project
-    template_path: PathBuf,
+    template_file: PathBuf,
 
-    /// target executable file in the project
-    target_executable_file: PathBuf,
+    /// target files in the project, which will be moved between build/run workspaces for further processing
+    ///
+    /// e.g. `build/main,data_generate_when_build`
+    #[arg(value_delimiter = ',')]
+    target_files: Vec<PathBuf>,
 
     /// where to store the workspaces, executables, etc.
     #[arg(short, long, default_value = "workspaces")]
@@ -36,6 +42,7 @@ struct Cli {
     init_bash_script_file: Option<PathBuf>,
 
     /// init cmake args
+    ///
     /// e.g. "-DCMAKE_BUILD_TYPE=Release", when used together with the `--init-bash-script-file` option, ignore this option
     #[arg(short, long)]
     init_cmake_args: Option<String>,
@@ -46,7 +53,16 @@ struct Cli {
 
     /// make target, when used together with the `--compile-bash-script-file` option, ignore this option
     #[arg(short, long)]
-    target: Option<String>,
+    make_target: Option<String>,
+
+    /// run bash script
+    #[arg(long)]
+    run_bash_script: Option<String>,
+
+    /// run bash script file
+    /// when used together with the `--run-bash-script` option, ignore this option
+    #[arg(long)]
+    run_bash_script_file: Option<PathBuf>,
 
     /// enable progress bar
     #[arg(short, long)]
@@ -70,6 +86,37 @@ struct Cli {
     cache: bool,
 }
 
+fn _command_platform_specific_behavior_check() {
+    fn create_file_with_executable_permission(file_path: &str, msg: &str) {
+        if let Some(parent) = std::path::Path::new(file_path).parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let mut file = std::fs::File::create(file_path).unwrap();
+        let mut perms = file.metadata().unwrap().permissions();
+        perms.set_mode(0o755);
+        file.set_permissions(perms).unwrap();
+        write!(file, "{}", "#!/bin/bash\n").unwrap();
+        writeln!(file, "{}", msg).unwrap();
+    }
+    create_file_with_executable_permission("test.sh", "echo parent");
+    create_file_with_executable_permission("tmp/test.sh", "echo current");
+    let output = Command::new("./test.sh")
+        .current_dir("tmp")
+        .output()
+        .unwrap()
+        .stdout;
+    if output != b"current\n" {
+        println!("Waning: command run under parent process, you should use custom run function")
+    } else {
+        println!(
+            "command run under `current_dir`, free to use relative path in your `run_bash_script`"
+        );
+    }
+    std::fs::remove_file("test.sh").unwrap();
+    std::fs::remove_file("tmp/test.sh").unwrap();
+    std::fs::remove_dir("tmp").unwrap();
+}
+
 fn main() {
     let args = Cli::parse();
     let data = if let Some(data_str) = args.data {
@@ -90,7 +137,7 @@ fn main() {
         Some(std::fs::read_to_string(init_bash_script_file).unwrap())
     } else if let Some(init_cmake_args) = args.init_cmake_args {
         Some(format!(
-            r#"cmake -S . -B build {} -DPROFILING=ON"#,
+            r#"cmake -S . -B build {} -DPARABUILD=ON"#,
             init_cmake_args
         ))
     } else {
@@ -100,12 +147,12 @@ fn main() {
     let mut parabuilder = Parabuilder::new(
         args.project_path,
         args.workspaces_path,
-        args.template_path,
-        args.target_executable_file,
+        args.template_file,
+        &args.target_files,
     )
     .in_place_template(args.in_place_template)
-    .enable_progress_bar(args.progress_bar).
-    use_cached_workspace(args.cache);
+    .enable_progress_bar(args.progress_bar)
+    .use_cached_workspace(args.cache);
 
     if let Some(init_bash_script) = init_bash_script {
         parabuilder = parabuilder.init_bash_script(&init_bash_script);
@@ -114,7 +161,7 @@ fn main() {
     let compile_bash_script = if let Some(compile_bash_script_file) = args.compile_bash_script_file
     {
         Some(std::fs::read_to_string(compile_bash_script_file).unwrap())
-    } else if let Some(target) = args.target {
+    } else if let Some(target) = args.make_target {
         Some(format!(r#"cmake --build build --target {} -- -B"#, target))
     } else {
         None
@@ -122,6 +169,17 @@ fn main() {
 
     if let Some(compile_bash_script) = compile_bash_script {
         parabuilder = parabuilder.compile_bash_script(&compile_bash_script);
+    }
+
+    if let Some(run_bash_script) = args.run_bash_script {
+        parabuilder = parabuilder.run_bash_script(&run_bash_script);
+    } else if let Some(run_bash_script_file) = args.run_bash_script_file {
+        let run_bash_script = std::fs::read_to_string(run_bash_script_file).unwrap();
+        parabuilder = parabuilder.run_bash_script(&run_bash_script);
+    } else {
+        println!("Warning: no run bash script provided, we will run target_file[0] directly");
+        parabuilder = parabuilder
+            .run_bash_script(&format!(r#"./{}"#, args.target_files[0].to_str().unwrap()));
     }
 
     if let Some(build_workers) = args.build_workers {

@@ -32,14 +32,16 @@ pub struct Parabuilder {
     project_path: PathBuf,
     workspaces_path: PathBuf,
     template_file: PathBuf,
-    target_executable_file: PathBuf,
-    target_executable_file_base: String,
+    target_files: Vec<PathBuf>,
+    target_files_base: Vec<String>,
     init_bash_script: String,
     compile_bash_script: String,
+    run_bash_script: String,
     build_workers: usize,
     run_method: RunMethod,
-    to_target_executable_path_dir: PathBuf,
-    run_func_data: fn(&PathBuf, &PathBuf, &JsonValue, &mut JsonValue) -> Result<JsonValue, Box<dyn Error>>,
+    temp_target_path_dir: PathBuf,
+    run_func_data:
+        fn(&PathBuf, &str, &JsonValue, &mut JsonValue) -> Result<JsonValue, Box<dyn Error>>,
     data_queue_receiver: Option<Receiver<(usize, JsonValue)>>,
     compilation_error_handling_method: CompliationErrorHandlingMethod,
     auto_gather_array_data: bool,
@@ -51,11 +53,13 @@ pub struct Parabuilder {
 
 fn run_func_data_panic_on_error(
     workspace_path: &PathBuf,
-    target_executable_path: &PathBuf,
+    run_script: &str,
     data: &JsonValue,
     run_data: &mut JsonValue,
 ) -> Result<JsonValue, Box<dyn Error>> {
-    let output = Command::new(&target_executable_path)
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(run_script)
         .current_dir(&workspace_path)
         .output()
         .unwrap();
@@ -83,11 +87,13 @@ fn run_func_data_panic_on_error(
 
 fn run_func_data_ignore_on_error(
     workspace_path: &PathBuf,
-    target_executable_path: &PathBuf,
+    run_script: &str,
     data: &JsonValue,
     run_data: &mut JsonValue,
 ) -> Result<JsonValue, Box<dyn Error>> {
-    let output = Command::new(&target_executable_path)
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(run_script)
         .current_dir(&workspace_path)
         .output()
         .unwrap();
@@ -111,23 +117,25 @@ fn run_func_data_ignore_on_error(
 
 pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: fn(
     &PathBuf,
-    &PathBuf,
+    &str,
     &JsonValue,
     &mut JsonValue,
 ) -> Result<JsonValue, Box<dyn Error>> = run_func_data_panic_on_error;
 pub const IGNORE_ON_ERROR_DEFAULT_RUN_FUNC: fn(
     &PathBuf,
-    &PathBuf,
+    &str,
     &JsonValue,
     &mut JsonValue,
 ) -> Result<JsonValue, Box<dyn Error>> = run_func_data_ignore_on_error;
 
 impl Parabuilder {
+    pub const TEMP_TARGET_PATH_DIR: &'static str = "targets";
+
     pub fn new<P, Q, R, S>(
         project_path: P,
         workspaces_path: Q,
         template_file: R,
-        target_executable_file: S,
+        target_files: &[S],
     ) -> Self
     where
         P: AsRef<Path>,
@@ -138,15 +146,35 @@ impl Parabuilder {
         let project_path = project_path.as_ref().to_path_buf();
         let workspaces_path = workspaces_path.as_ref().to_path_buf();
         let template_file = template_file.as_ref().to_path_buf();
-        let target_executable_file = target_executable_file.as_ref().to_path_buf();
-        let target_executable_file_base = target_executable_file
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let to_target_executable_path_dir = workspaces_path.join("executable");
+        let target_files: Vec<PathBuf> = target_files
+            .into_iter()
+            .map(|target_file| target_file.as_ref().to_path_buf())
+            .collect();
+        let target_files_base = target_files
+            .iter()
+            .map(|target_file| {
+                target_file
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+
+        let default_run_bash_script = if target_files.len() > 0 {
+            format!(
+                r#"
+                ./{}
+                "#,
+                target_files[0].to_string_lossy()
+            )
+        } else {
+            "".to_string()
+        };
+
+        let temp_target_path_dir = workspaces_path.join(Self::TEMP_TARGET_PATH_DIR);
         let init_bash_script = r#"
-        cmake -B build -S .
+        cmake -B build -S . -DPARABUILD=ON
         "#;
         let compile_bash_script = r#"
         cmake --build build --target all -- -B
@@ -156,13 +184,14 @@ impl Parabuilder {
             project_path,
             workspaces_path,
             template_file,
-            target_executable_file,
-            target_executable_file_base,
+            target_files,
+            target_files_base,
             init_bash_script: init_bash_script.to_string(),
             compile_bash_script: compile_bash_script.to_string(),
+            run_bash_script: default_run_bash_script,
             build_workers,
             run_method: RunMethod::Exclusive,
-            to_target_executable_path_dir,
+            temp_target_path_dir,
             run_func_data: IGNORE_ON_ERROR_DEFAULT_RUN_FUNC,
             data_queue_receiver: None,
             compilation_error_handling_method: CompliationErrorHandlingMethod::Collect,
@@ -181,6 +210,11 @@ impl Parabuilder {
 
     pub fn compile_bash_script(mut self, compile_bash_script: &str) -> Self {
         self.compile_bash_script = compile_bash_script.to_string();
+        self
+    }
+
+    pub fn run_bash_script(mut self, run_bash_script: &str) -> Self {
+        self.run_bash_script = run_bash_script.to_string();
         self
     }
 
@@ -216,7 +250,12 @@ impl Parabuilder {
 
     pub fn run_func(
         mut self,
-        run_func: fn(&PathBuf, &PathBuf, &JsonValue, &mut JsonValue) -> Result<JsonValue, Box<dyn Error>>,
+        run_func: fn(
+            &PathBuf,
+            &str,
+            &JsonValue,
+            &mut JsonValue,
+        ) -> Result<JsonValue, Box<dyn Error>>,
     ) -> Self {
         self.run_func_data = run_func;
         self
@@ -337,7 +376,7 @@ impl Parabuilder {
         let mut run_handles = vec![];
         if out_of_place_run_workers > 0 {
             // only compile to executable when run_workers = 0
-            std::fs::create_dir_all(self.workspaces_path.join("executable")).unwrap();
+            std::fs::create_dir_all(self.workspaces_path.join(Self::TEMP_TARGET_PATH_DIR)).unwrap();
             for (i, destination) in
                 (0..out_of_place_run_workers).map(|i| (i, format!("workspace_exe_{}", i)))
             {
@@ -386,7 +425,7 @@ impl Parabuilder {
             handle.join().unwrap();
         }
 
-        std::fs::create_dir_all(&self.to_target_executable_path_dir).unwrap();
+        std::fs::create_dir_all(&self.temp_target_path_dir).unwrap();
 
         Ok(())
     }
@@ -490,20 +529,24 @@ impl Parabuilder {
     fn build_worker(
         &self,
         workspace_path: PathBuf,
-        executable_queue_sender: Sender<(PathBuf, JsonValue)>,
+        executable_queue_sender: Sender<(usize, JsonValue)>,
         build_pb: ProgressBar,
         run_pb: ProgressBar,
     ) -> std::thread::JoinHandle<(JsonValue, Vec<JsonValue>)> {
         let template_path = self.project_path.join(&self.template_file);
-        let target_executable_path = workspace_path.join(&self.target_executable_file);
+        let targets_path: Vec<PathBuf> = self
+            .target_files
+            .iter()
+            .map(|target_file| workspace_path.join(target_file).to_path_buf())
+            .collect();
         let compile_bash_script = self.compile_bash_script.clone();
         let template_output_file = if self.in_place_template {
             self.template_file.clone()
         } else {
             self.template_file.with_extension("")
         };
-        let target_executable_file_base = self.target_executable_file_base.clone();
-        let to_target_executable_path_dir = self.to_target_executable_path_dir.clone();
+        let target_files_base = self.target_files_base.clone();
+        let temp_target_path_dir = self.temp_target_path_dir.clone();
         let data_queue_receiver = self.data_queue_receiver.as_ref().unwrap().clone();
         let run_method = self.run_method;
         let run_func = self.run_func_data;
@@ -517,6 +560,7 @@ impl Parabuilder {
             .unwrap();
         let mut run_data = JsonValue::Null;
         let mut compile_error_datas = Vec::new();
+        let run_bash_script = self.run_bash_script.clone();
         std::thread::spawn(move || {
             for (i, data) in data_queue_receiver.iter() {
                 let mut template_output = std::fs::File::create(&template_output_path)
@@ -560,25 +604,21 @@ impl Parabuilder {
                     }
                 }
                 if matches!(run_method, RunMethod::No) {
-                    let to_target_executable_path_file =
-                        format!("{}_{}", &target_executable_file_base, i);
-                    let to_target_executable_path =
-                        to_target_executable_path_dir.join(&to_target_executable_path_file);
-                    let to_target_executable_metadata_path =
-                        to_target_executable_path.with_extension("json");
-                    std::fs::rename(&target_executable_path, &to_target_executable_path).expect(
-                        format!(
-                            "Failed to rename {:?} to {:?}",
-                            target_executable_path, to_target_executable_path
-                        )
-                        .as_str(),
-                    );
-                    std::fs::write(&to_target_executable_metadata_path, data.to_string()).unwrap();
+                    for (target_path, target_file_base) in
+                        targets_path.iter().zip(target_files_base.iter())
+                    {
+                        let to_target_executable_path_file = format!("{}_{}", &target_file_base, i);
+                        let to_target_executable_path =
+                            temp_target_path_dir.join(&to_target_executable_path_file);
+                        std::fs::copy(&target_path, &to_target_executable_path).unwrap();
+                    }
+                    let to_metadata_path = temp_target_path_dir.join(format!("data_{}.json", i));
+                    std::fs::write(&to_metadata_path, data.to_string()).unwrap();
                 } else {
                     if matches!(run_method, RunMethod::InPlace) {
                         run_func(
                             &std::fs::canonicalize(&workspace_path).unwrap(),
-                            &std::fs::canonicalize(&target_executable_path).unwrap(),
+                            &run_bash_script,
                             &data,
                             &mut run_data,
                         )
@@ -587,15 +627,16 @@ impl Parabuilder {
                     } else if matches!(run_method, RunMethod::OutOfPlace(_))
                         || matches!(run_method, RunMethod::Exclusive)
                     {
-                        let to_target_executable_path_file =
-                            format!("{}_{}", &target_executable_file_base, i);
-                        let to_target_executable_path =
-                            to_target_executable_path_dir.join(&to_target_executable_path_file);
-                        std::fs::rename(&target_executable_path, &to_target_executable_path)
-                            .unwrap();
-                        executable_queue_sender
-                            .send((to_target_executable_path, data))
-                            .unwrap();
+                        for (target_path, target_file_base) in
+                            targets_path.iter().zip(target_files_base.iter())
+                        {
+                            let to_target_executable_path_file =
+                                format!("{}_{}", &target_file_base, i);
+                            let to_target_executable_path =
+                                temp_target_path_dir.join(&to_target_executable_path_file);
+                            std::fs::copy(&target_path, &to_target_executable_path).unwrap();
+                        }
+                        executable_queue_sender.send((i, data)).unwrap();
                     } else {
                         panic!("Run method not implemented");
                     }
@@ -608,14 +649,21 @@ impl Parabuilder {
     fn run_worker(
         &self,
         workspace_path: PathBuf,
-        executable_queue_receiver: Receiver<(PathBuf, JsonValue)>,
+        executable_queue_receiver: Receiver<(usize, JsonValue)>,
         run_pb: ProgressBar,
     ) -> std::thread::JoinHandle<JsonValue> {
-        let target_executable_path = workspace_path.join(&self.target_executable_file);
+        let targets_path: Vec<PathBuf> = self
+            .target_files
+            .iter()
+            .map(|target_file| workspace_path.join(target_file).to_path_buf())
+            .collect();
+        let target_files_base = self.target_files_base.clone();
         let run_func = self.run_func_data;
         let mut run_data = JsonValue::Null;
         let enable_progress_bar = self.enable_progress_bar;
         let mpb = self.mpb.clone();
+        let run_bash_script = self.run_bash_script.clone();
+        let temp_target_path_dir = self.temp_target_path_dir.clone();
         std::thread::spawn(move || {
             let mut last_data = JsonValue::Null;
             let sp = Self::add_spinner2(
@@ -623,11 +671,17 @@ impl Parabuilder {
                 &mpb,
                 serde_json::to_string_pretty(&last_data).unwrap(),
             );
-            for (to_target_executable_path, data) in executable_queue_receiver.iter() {
-                std::fs::rename(&to_target_executable_path, &target_executable_path).unwrap();
+            for (i, data) in executable_queue_receiver.iter() {
+                for (target_path, target_file_base) in
+                    targets_path.iter().zip(target_files_base.iter())
+                {
+                    let to_target_path_file = format!("{}_{}", &target_file_base, i);
+                    let to_target_executable_path = temp_target_path_dir.join(&to_target_path_file);
+                    std::fs::rename(&to_target_executable_path, &target_path).unwrap();
+                }
                 last_data = run_func(
                     &std::fs::canonicalize(&workspace_path).unwrap(),
-                    &std::fs::canonicalize(&target_executable_path).unwrap(),
+                    &run_bash_script,
                     &data,
                     &mut run_data,
                 )
@@ -714,20 +768,39 @@ mod tests {
     // use std::time::Instant;
     use serde_json::json;
 
+    const EXAMPLE_PROJECT: &str = crate::test_constants::EXAMPLE_CMAKE_PROJECT_PATH;
+    const EXAMPLE_TEMPLATE_FILE: &str = "src/main.cpp.template";
+    const EXAMPLE_IN_PLACE_TEMPLATE_FILE: &str = "src/main.cpp";
+    const EXAMPLE_TARGET_EXECUTABLE_FILE: &str = "build/main";
+    const EXAMPLE_INIT_BASH_SCRIPT: &str = r#"
+        cmake -B build -S .
+        "#;
+    const EXAMPLE_IN_PLACE_INIT_BASH_SCRIPT: &str = r#"
+        cmake -B build -S . -DPARABUILD=ON
+        "#;
+    const EXAMPLE_COMPILE_BASH_SCRIPT: &str = r#"
+        cmake --build build --target all -- -B
+        "#;
+
     #[test]
     fn test_workspaces_under_project_path() {
+        let example_project_path = std::fs::canonicalize(EXAMPLE_PROJECT).unwrap();
         println!("{}", std::fs::canonicalize(".").unwrap().display());
         let workspaces_path = PathBuf::from("workspaces_under_project_path");
         let parabuilder = Parabuilder::new(
             ".",
             &workspaces_path,
-            "tests/example_project/src/main.cpp.template",
-            "build/main",
+            example_project_path.join("src/main.cpp.template"),
+            &["build/main"],
         )
         .init_bash_script(
-            r#"
-            cmake -B build -S tests/example_project
-            "#,
+            format!(
+                r#"
+                cmake -B build -S {}
+                "#,
+                EXAMPLE_PROJECT
+            )
+            .as_str(),
         )
         .compile_bash_script(
             r#"
@@ -736,7 +809,10 @@ mod tests {
         );
         parabuilder.init_workspace().unwrap();
         assert!(workspaces_path
-            .join("workspace_0/tests/example_project/src/main.cpp.template")
+            .join(format!(
+                "workspace_0/{}/src/main.cpp.template",
+                EXAMPLE_PROJECT
+            ))
             .exists());
         assert!(workspaces_path.join("workspace_0/build").exists());
         std::fs::remove_dir_all(workspaces_path).unwrap();
@@ -744,17 +820,28 @@ mod tests {
 
     fn run_func(
         workspace_path: &PathBuf,
-        target_executable_path: &PathBuf,
+        _: &str,
         _data: &JsonValue,
         run_data: &mut JsonValue,
     ) -> Result<JsonValue, Box<dyn Error>> {
-        let output = Command::new(&target_executable_path)
+        let workspace_id = workspace_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split('_')
+            .last()
+            .unwrap();
+        let output = Command::new("./build/main")
+            .arg(workspace_id)
             .current_dir(&workspace_path)
             .output()
             .unwrap();
         let stdout = String::from_utf8(output.stdout).unwrap();
         if output.status.success() {
-            assert!(workspace_path.join("output.txt").exists());
+            assert!(workspace_path
+                .join(format!("{}.txt", workspace_id))
+                .exists());
             let output_number = stdout.trim().parse::<i64>().unwrap();
             if run_data.is_null() {
                 *run_data = json!(output_number);
@@ -767,20 +854,6 @@ mod tests {
             Err(format!("stderr: {}", stderr).as_str())?
         }
     }
-
-    const EXAMPLE_PROJECT: &str = "tests/example_project";
-    const EXAMPLE_TEMPLATE_FILE: &str = "src/main.cpp.template";
-    const EXAMPLE_IN_PLACE_TEMPLATE_FILE: &str = "src/main.cpp";
-    const EXAMPLE_TARGET_EXECUTABLE_FILE: &str = "build/main";
-    const EXAMPLE_INIT_BASH_SCRIPT: &str = r#"
-        cmake -B build -S .
-        "#;
-    const EXAMPLE_IN_PLACE_INIT_BASH_SCRIPT: &str = r#"
-        cmake -B build -S . -DPROFILING=ON
-        "#;
-    const EXAMPLE_COMPILE_BASH_SCRIPT: &str = r#"
-        cmake --build build --target all -- -B
-        "#;
 
     const SINGLETHREADED_N: i64 = 20;
     const MULTITHREADED_N: i64 = 100;
@@ -809,7 +882,7 @@ mod tests {
             } else {
                 EXAMPLE_TEMPLATE_FILE
             },
-            EXAMPLE_TARGET_EXECUTABLE_FILE,
+            &[EXAMPLE_TARGET_EXECUTABLE_FILE],
         )
         .init_bash_script(if in_place_template {
             EXAMPLE_IN_PLACE_INIT_BASH_SCRIPT
@@ -835,10 +908,14 @@ mod tests {
             assert!(run_data.is_null(), "got: {}", run_data);
             for i in 0..size {
                 assert!(workspaces_path
-                    .join(format!("executable/main_{}", i))
+                    .join(format!("{}/main_{}", Parabuilder::TEMP_TARGET_PATH_DIR, i))
                     .exists());
                 assert!(workspaces_path
-                    .join(format!("executable/main_{}.json", i))
+                    .join(format!(
+                        "{}/data_{}.json",
+                        Parabuilder::TEMP_TARGET_PATH_DIR,
+                        i
+                    ))
                     .exists());
             }
         } else {

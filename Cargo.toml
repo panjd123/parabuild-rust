@@ -1,6 +1,6 @@
 [package]
 name = "parabuild"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Jarden Pan <xm.jarden@gmail.com>"]
 license = "MIT"
@@ -23,7 +23,6 @@ indicatif = "0.17"
 clap = { version = "4.5", features = ["derive"] }
 
 [dev-dependencies]
-serial_test = "0.5"
 
 [lib]
 name = "parabuild"

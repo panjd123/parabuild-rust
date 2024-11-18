@@ -1,3 +1,7 @@
+# 0.2.3
+
+- Now use `target_files` to represent general compilation products and migrate all from `build` to `run` workspace
+
 # 0.2.2
 
 - Add handlebars helper: `{{default name 'default_value'}}`

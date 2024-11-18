@@ -8,9 +8,11 @@ where
     P: AsRef<Path>,
     Q: AsRef<Path>,
 {
-    let mut options = fs_extra::dir::CopyOptions::new();
-    options.overwrite = true;
-    options.copy_inside = true;
+    fs_extra::dir::create_all(&to, false)?;
+    let options = fs_extra::dir::CopyOptions::new()
+        .overwrite(true)
+        .copy_inside(true)
+        .content_only(true);
     fs_extra::dir::copy(from, to, &options)?;
     Ok(())
 }
@@ -46,21 +48,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
-    // use std::io::{Seek, Write};
-    // use std::time::Instant;
+    use tempfile::tempdir;
 
-    static EXAMPLE_PROJECT: &str = "tests/example_project";
-    static EXAMPLE_PROJECT_COPY: &str = "tests/example_project_copy";
+    const EXAMPLE_PROJECT: &str = crate::test_constants::EXAMPLE_CMAKE_PROJECT_PATH;
 
     #[test]
-    #[serial]
     fn test_copy_dir() {
         let source = Path::new(EXAMPLE_PROJECT);
-        let destination = Path::new(EXAMPLE_PROJECT_COPY);
-        fs_extra::dir::remove(destination).unwrap();
-        let result = copy_dir(source, destination);
-        assert!(result.is_ok());
+        let destination = &tempdir().unwrap().into_path();
+        println!("source: {:?}", source);
+        println!("destination: {:?}", destination);
+        copy_dir(source, destination).unwrap();
         let main_file = destination.join("src/main.cpp.template");
         let ignore_file = destination.join("src/example.ignore");
         let gitignore_file = destination.join(".gitignore");
@@ -71,13 +69,12 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_copy_dir_with_ignore() {
         let source = Path::new(EXAMPLE_PROJECT);
-        let destination = Path::new(EXAMPLE_PROJECT_COPY);
+        let destination = &tempdir().unwrap().into_path();
+        println!("destination: {:?}", destination);
         fs_extra::dir::remove(destination).unwrap();
-        let result = copy_dir_with_ignore(source, destination);
-        assert!(result.is_ok());
+        copy_dir_with_ignore(source, destination).unwrap();
         let main_file = destination.join("src/main.cpp.template");
         let ignore_file = destination.join("src/example.ignore");
         let gitignore_file = destination.join(".gitignore");
@@ -86,62 +83,4 @@ mod tests {
         assert!(!gitignore_file.exists());
         std::fs::remove_dir_all(destination).unwrap();
     }
-
-    // #[test]
-    // #[serial]
-    // fn test_multithreaded_copy_dir_with_ignore() {
-    //     const NUM_THREADS: usize = 16;
-    //     fn multithreaded_clean() {
-    //         let mut handles = vec![];
-    //         for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
-    //             let handle = std::thread::spawn(move || {
-    //                 fs_extra::dir::remove(&destination).unwrap();
-    //             });
-    //             handles.push(handle);
-    //         }
-    //         for handle in handles {
-    //             handle.join().unwrap();
-    //         }
-    //     }
-    //     let source = Path::new(EXAMPLE_PROJECT);
-    //     // setup huge file
-    //     let huge_file = source.join("src/huge_file");
-    //     let mut file = std::fs::File::create(&huge_file).unwrap();
-    //     file.seek(std::io::SeekFrom::End(16 * 1024 * 1024)).unwrap(); // 16 MB
-    //     file.write_all(b"0").unwrap();
-    //     file.flush().unwrap();
-
-    //     multithreaded_clean();
-    //     let start = Instant::now();
-    //     let mut handles = vec![];
-    //     for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
-    //         let source = source.to_path_buf();
-    //         let destination = Path::new(&destination).to_path_buf();
-    //         let handle = std::thread::spawn(move || {
-    //             copy_dir_with_ignore(&source, &destination).unwrap();
-    //         });
-    //         handles.push(handle);
-    //     }
-    //     for handle in handles {
-    //         handle.join().unwrap();
-    //     }
-    //     let duration = start.elapsed();
-    //     println!(
-    //         "Time elapsed in multithreaded copy_dir_with_ignore() is: {:?}",
-    //         duration
-    //     );
-    //     multithreaded_clean();
-    //     let start2 = Instant::now();
-    //     for destination in (0..NUM_THREADS).map(|i| format!("{}_{}", EXAMPLE_PROJECT_COPY, i)) {
-    //         copy_dir_with_ignore(&source, &destination).unwrap();
-    //     }
-    //     let duration2 = start2.elapsed();
-    //     println!(
-    //         "Time elapsed in single-threaded copy_dir_with_ignore() is: {:?}",
-    //         duration2
-    //     );
-    //     multithreaded_clean();
-
-    //     fs_extra::file::remove(huge_file).unwrap();
-    // }
 }

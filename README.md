@@ -31,7 +31,7 @@ use parabuild::Parabuilder;
 use serde_json::{json, Value as JsonValue};
 
 fn main() {
-    let project_path = "tests/example_project"; // your project path
+    let project_path = "tests/example_cmake_project"; // your project path
     let workspaces_path = "workspaces"; // where to store the workspaces, executables, etc.
     let template_path = "src/main.cpp.template"; // template file in the project
     let build_path = "build/main"; // target executable file
@@ -48,15 +48,25 @@ fn main() {
 
 We return `compute_error_datas` to indicate the data with compilation errors. Compilation errors are common in debugging projects that heavily use templates.
 
+### Advanced Usage
+
+Parabuild use
+
+```shell
+cmake -B build -S . -DPARABUILD=ON
+```
+
+and
+
+```shell
+cmake --build build --target all -- -B
+```
+
+as the default workspace initialization script and the script to be compiled each time.
+
 ## Command Line
 
 We also provide a command line tool to compile the project. You can use `cargo install parabuild` to install it.
-
-### Quick Start
-
-```shell
-cargo run --release -- tests/example_project src/main.cpp.template build/main --data '[{"N": 10}, {"N": 20}]'
-```
 
 ### Help
 
@@ -100,6 +110,86 @@ Options:
           Print help
   -V, --version
           Print version
+```
+
+## Best Practices
+
+We mainly share how to make your normal work compatible with parabuild and avoid maintaining two sets of code at the same time.
+
+### CMake-project
+
+You need to define a macro to use normal code when not parabuild.
+
+`CMakelists.txt`:
+
+```CMakeLists.txt
+cmake_minimum_required(VERSION 3.26)
+
+project(ExampleProject)
+
+set(CMAKE_CXX_STANDARD 11)
+
+if (PARABUILD STREQUAL "ON")
+    add_compile_definitions(PARABUILD=ON)
+endif()
+
+add_executable(main src/main.cpp)
+```
+
+`main.cpp`:
+
+```cpp
+#include <iostream>
+
+template <int n>
+void print()
+{
+    std::cout << n << std::endl;
+}
+
+int main()
+{
+#ifndef PARABUILD
+    print<42>();
+#else
+    print<{{default N 42}}>();
+#endif
+    return 0;
+}
+```
+
+run script:
+
+```shell
+parabuild \
+    tests/example_cmake_project \
+    src/main.cpp \
+    build/main \
+    --in-place-template \
+    --data '[{"N": 10}, {"N": 20}]'
+```
+
+output:
+
+```shell
+[
+  {
+    "data": {
+      "N": 10
+    },
+    "status": 0,
+    "stderr": "",
+    "stdout": "10\n"
+  },
+  {
+    "data": {
+      "N": 20
+    },
+    "status": 0,
+    "stderr": "",
+    "stdout": "20\n"
+  }
+]
 ```
 
 ## Features
