@@ -1,4 +1,4 @@
-use crate::filesystem_utils::{copy_dir, copy_dir_with_ignore};
+use crate::filesystem_utils::{copy_dir, copy_dir_with_ignore, wait_until_file_ready};
 use crate::handlebars_helper::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
@@ -104,7 +104,10 @@ fn run_func_data_ignore_on_error(
     let stderr = String::from_utf8(output.stderr).unwrap();
     let this_data = json! {
         {
-            "status": output.status.code().unwrap(),
+            "status": match output.status.code() {
+                Some(code) => code,
+                None => -1
+            },
             "stdout": stdout,
             "stderr": stderr,
             "data": data
@@ -682,6 +685,9 @@ impl Parabuilder {
                     let to_target_executable_path = temp_target_path_dir.join(&to_target_path_file);
                     std::fs::rename(&to_target_executable_path, &target_path).unwrap();
                 }
+                for target_path in targets_path.iter() {
+                    wait_until_file_ready(&target_path).unwrap();
+                }
                 last_data = run_func(
                     &std::fs::canonicalize(&workspace_path).unwrap(),
                     &run_bash_script,
@@ -838,8 +844,14 @@ mod tests {
         let output = Command::new("./build/main")
             .arg(workspace_id)
             .current_dir(&workspace_path)
-            .output()
-            .unwrap();
+            .output();
+        let output = match output {
+            Ok(output) => output,
+            Err(err) => {
+                eprintln!("Error running executable: {}", err);
+                return Err(err.into());
+            }
+        };
         let stdout = String::from_utf8(output.stdout).unwrap();
         if output.status.success() {
             assert!(workspace_path
@@ -1042,4 +1054,15 @@ mod tests {
             true,
         );
     }
+
+    // #[test]
+    // fn test_multithreaded_parabuild_out_of_place_run_in_place_template_heavy() {
+    //     parabuild_tester(
+    //         "test_multithreaded_parabuild_out_of_place_run_in_place_template",
+    //         1000,
+    //         20,
+    //         RunMethod::OutOfPlace(4),
+    //         true,
+    //     );
+    // }
 }

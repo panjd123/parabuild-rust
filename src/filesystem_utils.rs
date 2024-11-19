@@ -1,6 +1,6 @@
 use fs_extra;
 use ignore;
-use std::path::Path;
+use std::{path::Path, process::Command};
 
 pub fn copy_dir<P, Q>(from: P, to: Q) -> Result<(), fs_extra::error::Error>
 where
@@ -40,6 +40,44 @@ where
                 eprintln!("Error: {}", e);
             }
         }
+    }
+    Ok(())
+}
+
+pub fn wait_until_file_ready(file_path: &Path) -> Result<(), std::io::Error> {
+    use std::thread::sleep;
+    use std::time::Duration;
+    let mut attempts = 0;
+    fn ready(file_path: &Path) -> bool {
+        if !file_path.exists() {
+            return false;
+        }
+        let output = Command::new("lsof").arg(file_path).output().unwrap();
+        if output.stdout.is_empty() {
+            return true;
+        }
+        eprintln!(
+            "Waiting for file to be ready: {:?}, {:?}",
+            file_path, output.stdout
+        );
+        false
+    }
+    while !ready(file_path) {
+        attempts += 1;
+        if attempts > 100 {
+            if !file_path.exists() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("File not found: {:?}", file_path),
+                ));
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("File is not ready: {:?}", file_path),
+                ));
+            }
+        }
+        sleep(Duration::from_millis(100));
     }
     Ok(())
 }

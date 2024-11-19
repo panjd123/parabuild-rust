@@ -6,6 +6,11 @@ void print(int id = 0)
 {
     std::cout << n << std::endl;
     std::ofstream file(std::to_string(id) + ".txt");
+    if (!file.is_open())
+    {
+        std::cerr << "Failed to open file" << std::endl;
+        return;
+    }
     file << n << std::endl;
 }
 
