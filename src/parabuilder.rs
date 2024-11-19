@@ -1,4 +1,4 @@
-use crate::filesystem_utils::{copy_dir, copy_dir_with_ignore, wait_until_file_ready};
+use crate::filesystem_utils::{copy_dir, copy_dir_with_ignore, wait_until_file_ready, is_command_installed};
 use crate::handlebars_helper::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
@@ -439,6 +439,12 @@ impl Parabuilder {
     pub fn run(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
         if !self.data_queue_receiver.is_some() {
             return Err("Data queue receiver is not initialized".into());
+        }
+        if !is_command_installed("bash") {
+            return Err("bash is not installed".into());
+        }
+        if !is_command_installed("lsof") {
+            return Err("lsof is not installed".into());
         }
         let mut build_handles = vec![];
         let mut run_handles = Vec::new();

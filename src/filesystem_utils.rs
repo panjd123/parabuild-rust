@@ -82,6 +82,13 @@ pub fn wait_until_file_ready(file_path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+pub fn is_command_installed(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +126,11 @@ mod tests {
         assert!(!ignore_file.exists());
         assert!(!gitignore_file.exists());
         std::fs::remove_dir_all(destination).unwrap();
+    }
+
+    #[test]
+    fn test_is_command_installed() {
+        assert!(is_command_installed("ls"));
+        assert!(!is_command_installed("ls_not_exist"));
     }
 }
