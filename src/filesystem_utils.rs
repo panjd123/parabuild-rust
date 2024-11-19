@@ -2,7 +2,6 @@ use fs_extra;
 use ignore;
 use std::path::Path;
 
-#[allow(dead_code)]
 pub fn copy_dir<P, Q>(from: P, to: Q) -> Result<(), fs_extra::error::Error>
 where
     P: AsRef<Path>,
