@@ -10,6 +10,7 @@ homepage = "https://github.com/panjd123/parabuild-rust"
 description = "A parallel build utility for template heavy projects."
 keywords = ["build", "parallel", "template"]
 categories = ["development-tools::profiling", "asynchronous"]
+rust-version = "1.70"
 default-run = "parabuild"
 
 [dependencies]

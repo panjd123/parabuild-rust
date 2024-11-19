@@ -1,6 +1,12 @@
 # parabuild-rust
 
-This is a Rust tool that helps you compile complex (single file) projects in parallel, such as some C++ projects that heavily use templates (when you cannot achieve the best performance through `make -j`).
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/panjd123/parabuild-rust/ci.yml?style=flat-square&logo=github)](https://github.com/panjd123/parabuild-rust/actions)
+[![Crate informations](https://img.shields.io/crates/v/parabuild.svg?style=flat-square)](https://crates.io/crates/parabuild)
+[![Crates.io MSRV](https://img.shields.io/crates/msrv/parabuild?style=flat-square)](https://crates.io/crates/parabuild)
+[![License](https://img.shields.io/crates/l/parabuild.svg?style=flat-square)](https://github.com/panjd123/parabuild-rust#license)
+[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square)](https://docs.rs/parabuild)
+
+Parabuild is a Rust tool that helps you compile complex (single file) projects in parallel, such as some C++/CUDA projects that heavily use templates (when you cannot achieve the best performance through `make -j`).
 
 ## Quick Start
 
@@ -73,19 +79,7 @@ We return `compute_error_datas` to indicate the data with compilation errors. Co
 
 ### Advanced Usage
 
-Parabuild use
-
-```shell
-cmake -B build -S . -DPARABUILD=ON
-```
-
-and
-
-```shell
-cmake --build build --target all -- -B
-```
-
-as the default workspace initialization script and the script to be compiled each time.
+For more advanced usage, please refer to the [documentation](https://docs.rs/parabuild) and [complete example](examples/complete_usage.rs).
 
 ## Command Line
 
@@ -97,12 +91,12 @@ We also provide a command line tool to compile the project. You can use `cargo i
 $ parabuild --help
 A parallel build utility for template heavy projects.
 
-Usage: parabuild [OPTIONS] <PROJECT_PATH> <TEMPLATE_PATH> <TARGET_EXECUTABLE_FILE>
+Usage: parabuild [OPTIONS] <PROJECT_PATH> <TEMPLATE_FILE> [TARGET_FILES]...
 
 Arguments:
-  <PROJECT_PATH>            project path
-  <TEMPLATE_PATH>           template file in the project
-  <TARGET_EXECUTABLE_FILE>  target executable file in the project
+  <PROJECT_PATH>     project path
+  <TEMPLATE_FILE>    template file in the project
+  [TARGET_FILES]...  target files in the project, which will be moved between build/run workspaces for further processing
 
 Options:
   -w, --workspaces-path <WORKSPACES_PATH>
@@ -116,11 +110,15 @@ Options:
       --init-bash-script-file <INIT_BASH_SCRIPT_FILE>
           init bash script file
   -i, --init-cmake-args <INIT_CMAKE_ARGS>
-          init cmake args e.g. "-DCMAKE_BUILD_TYPE=Release", when used together with the `--init-bash-script-file` option, ignore this option
+          init cmake args
       --compile-bash-script-file <COMPILE_BASH_SCRIPT_FILE>
           compile bash script file
-  -t, --target <TARGET>
+  -m, --make-target <MAKE_TARGET>
           make target, when used together with the `--compile-bash-script-file` option, ignore this option
+      --run-bash-script <RUN_BASH_SCRIPT>
+          run bash script
+      --run-bash-script-file <RUN_BASH_SCRIPT_FILE>
+          run bash script file when used together with the `--run-bash-script` option, ignore this option
   -p, --progress-bar
           enable progress bar
   -j, --build-workers <BUILD_WORKERS>
@@ -129,109 +127,13 @@ Options:
           run workers
       --in-place-template
           in place template
+      --cache
+          use cached workspaces, which means we only check the existence of the workspaces, and do not re-init the workspaces. you should make sure the workspaces are correct and up-to-date
   -h, --help
-          Print help
+          Print help (see more with '--help')
   -V, --version
           Print version
 ```
-
-## Best Practices
-
-We mainly share how to make your normal work compatible with parabuild and avoid maintaining two sets of code at the same time.
-
-### CMake-project
-
-You need to define a macro to use normal code when not parabuild.
-
-`CMakelists.txt`:
-
-```CMakeLists.txt
-cmake_minimum_required(VERSION 3.26)
-
-project(ExampleProject)
-
-set(CMAKE_CXX_STANDARD 11)
-
-if (PARABUILD STREQUAL "ON")
-    add_compile_definitions(PARABUILD=ON)
-endif()
-
-add_executable(main src/main.cpp)
-```
-
-`main.cpp`:
-
-```cpp
-#include <iostream>
-
-template <int n>
-void print()
-{
-    std::cout << n << std::endl;
-}
-
-int main()
-{
-#ifndef PARABUILD
-    print<42>();
-#else
-    print<{{default N 42}}>();
-#endif
-    return 0;
-}
-```
-
-run script:
-
-```shell
-parabuild \
-    tests/example_cmake_project \
-    src/main.cpp \
-    build/main \
-    --in-place-template \
-    --data '[{"N": 10}, {"N": 20}]'
-```
-
-output:
-
-```shell
-[
-  {
-    "data": {
-      "N": 10
-    },
-    "status": 0,
-    "stderr": "",
-    "stdout": "10\n"
-  },
-  {
-    "data": {
-      "N": 20
-    },
-    "status": 0,
-    "stderr": "",
-    "stdout": "20\n"
-  }
-]
-```
-
-## Features
-
-- Use handlebars template language to generate source file.
-- Ignore `.gitignore` files in the project, which may speed up the copying process.
-- Support multi-threading compilation/executing, these two parts can share threads, meaning they can be executed immediately after compilation, or they can be separated. For example, four threads can be used for compilation and one thread for execution. This is suitable for scenarios where only one executable file should be active in the system, such as when testing GPU performance. In this case, multiple CPU threads compile in the background while one CPU thread is responsible for execution.
-- TODO: Support better `force exclusive run`, which means only one executable thread is running, no compilation thread is running.
-- TODO: Support multiple template files.
-
-## Notes
-
-Due to the fact that system time is not monotonous , when the program executes quickly, there may be older timestamps in subsequent file modifications, which may cause make to not be able to track program modifications correctly. Please be aware that when writing compilation scripts, try to forcefully ignore timestamp compilation.
-
-https://doc.rust-lang.org/std/time/struct.SystemTime.html
-
-> A measurement of the system clock, useful for talking to external entities like the file system or other processes.
->
-> Distinct from the Instant type, this time measurement is not monotonic. This means that you can save a file to the file system, then save another file to the file system, and the second file has a SystemTime measurement earlier than the first. In other words, an operation that happens after another operation in real time may have an earlier SystemTime!
 
 ## License
 

@@ -17,18 +17,27 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tempfile::tempdir;
 
+/// Method you want to when there is a compilation error
 #[derive(PartialEq, Copy, Clone)]
 pub enum CompliationErrorHandlingMethod {
+    /// Just ignore this data
     Ignore,
+    /// Collect this data into `compile_error_datas` returned by `run()`
     Collect,
+    /// Panic when there is a compilation error
     Panic,
 }
 
+/// Method you want to run the your `run_bash_script`
 #[derive(PartialEq, Copy, Clone)]
 pub enum RunMethod {
+    /// Just compile, do not run
     No,
+    /// Compile and run in the same thread/workspace
     InPlace,
+    /// Compile and run in different threads/workspaces, `usize` is the number of threads to run
     OutOfPlace(usize),
+    /// After compile, run in a single thread/workspace
     Exclusive,
 }
 
@@ -43,6 +52,7 @@ fn get_cuda_device_uuid(id: usize) -> Option<String> {
     }
 }
 
+/// The main body of building system
 pub struct Parabuilder {
     project_path: PathBuf,
     workspaces_path: PathBuf,
@@ -149,12 +159,15 @@ fn run_func_data_ignore_on_error(
     run_func_data_post_(this_data, run_data)
 }
 
+/// Default run function that panics when there is an error
 pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: fn(
     &PathBuf,
     &str,
     &JsonValue,
     &mut JsonValue,
 ) -> Result<JsonValue, Box<dyn Error>> = run_func_data_panic_on_error;
+
+/// Default run function that ignores when there is an error
 pub const IGNORE_ON_ERROR_DEFAULT_RUN_FUNC: fn(
     &PathBuf,
     &str,
