@@ -177,7 +177,7 @@ fn main() {
         let run_bash_script = std::fs::read_to_string(run_bash_script_file).unwrap();
         parabuilder = parabuilder.run_bash_script(&run_bash_script);
     } else {
-        println!("Warning: no run bash script provided, we will run target_file[0] directly");
+        println!("Warning: no run bash script provided, we will run {} directly", args.target_files[0].to_str().unwrap());
         parabuilder = parabuilder
             .run_bash_script(&format!(r#"./{}"#, args.target_files[0].to_str().unwrap()));
     }
