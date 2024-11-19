@@ -1,3 +1,4 @@
+use crate::cuda_utils::get_cuda_device_uuids;
 use crate::filesystem_utils::{
     copy_dir, copy_dir_with_ignore, is_command_installed, wait_until_file_ready,
 };
@@ -12,6 +13,7 @@ use std::error::Error;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -28,6 +30,17 @@ pub enum RunMethod {
     InPlace,
     OutOfPlace(usize),
     Exclusive,
+}
+
+static CUDA_DEVICE_UUIDS: OnceLock<Vec<String>> = OnceLock::new();
+
+fn get_cuda_device_uuid(id: usize) -> Option<String> {
+    let cuda_device_uuids = CUDA_DEVICE_UUIDS.get_or_init(|| get_cuda_device_uuids());
+    if id < cuda_device_uuids.len() {
+        Some(cuda_device_uuids[id].clone())
+    } else {
+        None
+    }
 }
 
 pub struct Parabuilder {
@@ -67,13 +80,24 @@ fn run_func_data_pre_(
         .split('_')
         .last()
         .unwrap();
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(run_script)
-        .env("PARABUILD_ID", workspace_id)
-        .current_dir(&workspace_path)
-        .output()
-        .unwrap();
+    let output = if let Some(mig_uuid) = get_cuda_device_uuid(workspace_id.parse().unwrap()) {
+        Command::new("bash")
+            .arg("-c")
+            .arg(run_script)
+            .env("PARABUILD_ID", workspace_id)
+            .env("CUDA_VISIBLE_DEVICES", mig_uuid)
+            .current_dir(&workspace_path)
+            .output()
+            .unwrap()
+    } else {
+        Command::new("bash")
+            .arg("-c")
+            .arg(run_script)
+            .env("PARABUILD_ID", workspace_id)
+            .current_dir(&workspace_path)
+            .output()
+            .unwrap()
+    };
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     let this_data = json! {

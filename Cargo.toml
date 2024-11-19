@@ -21,6 +21,7 @@ crossbeam-channel = "0.5"
 tempfile = "3.6"
 indicatif = "0.17"
 clap = { version = "4.5", features = ["derive"] }
+regex = "1.11"
 
 [dev-dependencies]
 

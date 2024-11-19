@@ -2,7 +2,8 @@
 
 - Now use `target_files` to represent general compilation products which should be migrated from `build` to `run` workspace
 - Add environment variable `PARABUILD_ID` to represent the unique id of the current run worker
-- Optimize the execution process to prevent `text file is busy` error
+- Optimize the execution process to prevent `text file is busy` error, please install `lsof` to use this feature
+- Add MIG support, auto set environment variables `CUDA_VISIBLE_DEVICES` when MIG is enabled in your system
 
 # 0.2.2
 
