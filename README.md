@@ -85,6 +85,17 @@ For more advanced usage, please refer to the [documentation](https://docs.rs/par
 
 We also provide a command line tool to compile the project. You can use `cargo install parabuild` to install it.
 
+### Simple Example
+
+```shell
+parabuild \
+    tests/example_cmake_project \
+    src/main.cpp \
+    build/main \
+    --in-place-template \
+    --data '[{"N": 10}, {"N": 20}]'
+```
+
 ### Help
 
 ```shell

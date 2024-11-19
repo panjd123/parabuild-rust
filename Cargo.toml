@@ -12,6 +12,7 @@ keywords = ["build", "parallel", "template"]
 categories = ["development-tools::profiling", "asynchronous"]
 rust-version = "1.70"
 default-run = "parabuild"
+exclude = ["/.github/*"]
 
 [dependencies]
 fs_extra = "1.3.0"
