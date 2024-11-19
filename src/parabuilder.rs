@@ -67,7 +67,10 @@ fn run_func_data_panic_on_error(
     let stderr = String::from_utf8(output.stderr).unwrap();
     let this_data = json! {
         {
-            "status": output.status.code().unwrap(),
+            "status": match output.status.code() {
+                Some(code) => code,
+                None => -1
+            },
             "stdout": stdout,
             "stderr": stderr,
             "data": data
