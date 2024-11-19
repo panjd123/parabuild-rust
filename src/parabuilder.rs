@@ -1,4 +1,6 @@
-use crate::filesystem_utils::{copy_dir, copy_dir_with_ignore, wait_until_file_ready, is_command_installed};
+use crate::filesystem_utils::{
+    copy_dir, copy_dir_with_ignore, is_command_installed, wait_until_file_ready,
+};
 use crate::handlebars_helper::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
@@ -51,15 +53,24 @@ pub struct Parabuilder {
     use_cached_workspace: bool,
 }
 
-fn run_func_data_panic_on_error(
+fn run_func_data_pre_(
     workspace_path: &PathBuf,
     run_script: &str,
     data: &JsonValue,
-    run_data: &mut JsonValue,
-) -> Result<JsonValue, Box<dyn Error>> {
+    _: &mut JsonValue,
+) -> Result<(bool, JsonValue), Box<dyn Error>> {
+    let workspace_id = workspace_path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split('_')
+        .last()
+        .unwrap();
     let output = Command::new("bash")
         .arg("-c")
         .arg(run_script)
+        .env("PARABUILD_ID", workspace_id)
         .current_dir(&workspace_path)
         .output()
         .unwrap();
@@ -76,16 +87,32 @@ fn run_func_data_panic_on_error(
             "data": data
         }
     };
-    if output.status.success() {
-        if run_data.is_null() {
-            *run_data = JsonValue::Array(vec![this_data.clone()]);
-        } else {
-            run_data.as_array_mut().unwrap().push(this_data.clone());
-        }
+    Ok((output.status.success(), this_data))
+}
+
+fn run_func_data_post_(
+    this_data: JsonValue,
+    run_data: &mut JsonValue,
+) -> Result<JsonValue, Box<dyn Error>> {
+    if run_data.is_null() {
+        *run_data = JsonValue::Array(vec![this_data.clone()]);
     } else {
-        Err(format!("stderr: {}", stderr).as_str())?;
+        run_data.as_array_mut().unwrap().push(this_data.clone());
     }
     Ok(this_data)
+}
+
+fn run_func_data_panic_on_error(
+    workspace_path: &PathBuf,
+    run_script: &str,
+    data: &JsonValue,
+    run_data: &mut JsonValue,
+) -> Result<JsonValue, Box<dyn Error>> {
+    let (success, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data)?;
+    if !success {
+        Err(format!("stderr: {}", this_data["stderr"]).as_str())?;
+    }
+    run_func_data_post_(this_data, run_data)
 }
 
 fn run_func_data_ignore_on_error(
@@ -94,31 +121,8 @@ fn run_func_data_ignore_on_error(
     data: &JsonValue,
     run_data: &mut JsonValue,
 ) -> Result<JsonValue, Box<dyn Error>> {
-    let output = Command::new("bash")
-        .arg("-c")
-        .arg(run_script)
-        .current_dir(&workspace_path)
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    let this_data = json! {
-        {
-            "status": match output.status.code() {
-                Some(code) => code,
-                None => -1
-            },
-            "stdout": stdout,
-            "stderr": stderr,
-            "data": data
-        }
-    };
-    if run_data.is_null() {
-        *run_data = JsonValue::Array(vec![this_data.clone()]);
-    } else {
-        run_data.as_array_mut().unwrap().push(this_data.clone());
-    }
-    Ok(this_data)
+    let (_, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data)?;
+    run_func_data_post_(this_data, run_data)
 }
 
 pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: fn(
@@ -800,7 +804,6 @@ mod tests {
     #[test]
     fn test_workspaces_under_project_path() {
         let example_project_path = std::fs::canonicalize(EXAMPLE_PROJECT).unwrap();
-        println!("{}", std::fs::canonicalize(".").unwrap().display());
         let workspaces_path = PathBuf::from("workspaces_under_project_path");
         let parabuilder = Parabuilder::new(
             ".",
@@ -831,49 +834,6 @@ mod tests {
             .exists());
         assert!(workspaces_path.join("workspace_0/build").exists());
         std::fs::remove_dir_all(workspaces_path).unwrap();
-    }
-
-    fn run_func(
-        workspace_path: &PathBuf,
-        _: &str,
-        _data: &JsonValue,
-        run_data: &mut JsonValue,
-    ) -> Result<JsonValue, Box<dyn Error>> {
-        let workspace_id = workspace_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .split('_')
-            .last()
-            .unwrap();
-        let output = Command::new("./build/main")
-            .arg(workspace_id)
-            .current_dir(&workspace_path)
-            .output();
-        let output = match output {
-            Ok(output) => output,
-            Err(err) => {
-                eprintln!("Error running executable: {}", err);
-                return Err(err.into());
-            }
-        };
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        if output.status.success() {
-            assert!(workspace_path
-                .join(format!("{}.txt", workspace_id))
-                .exists());
-            let output_number = stdout.trim().parse::<i64>().unwrap();
-            if run_data.is_null() {
-                *run_data = json!(output_number);
-            } else {
-                *run_data = json!(run_data.as_i64().unwrap() + output_number);
-            }
-            Ok(json!(output_number))
-        } else {
-            let stderr = String::from_utf8(output.stderr).unwrap();
-            Err(format!("stderr: {}", stderr).as_str())?
-        }
     }
 
     const SINGLETHREADED_N: i64 = 20;
@@ -913,9 +873,10 @@ mod tests {
         .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
         .build_workers(build_workers)
         .run_method(run_method)
-        .run_func(run_func)
+        .run_func(PANIC_ON_ERROR_DEFAULT_RUN_FUNC)
         .compilation_error_handling_method(CompliationErrorHandlingMethod::Collect)
-        .in_place_template(in_place_template);
+        .in_place_template(in_place_template)
+        .auto_gather_array_data(true);
         parabuilder.set_datas(datas).unwrap();
         parabuilder.init_workspace().unwrap();
         let (run_data, compile_error_datas) = parabuilder.run().unwrap();
@@ -946,11 +907,14 @@ mod tests {
                 42
             };
             assert!(run_data.is_array());
-            let sum = run_data
-                .as_array()
-                .unwrap()
-                .iter()
-                .fold(0, |acc, item| acc + item.as_i64().unwrap());
+            let sum = run_data.as_array().unwrap().iter().fold(0, |acc, item| {
+                acc + item["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .trim()
+                    .parse::<i64>()
+                    .unwrap()
+            });
             assert!(
                 sum == ground_truth,
                 "expected: {}, got: {}, run_data: {}",

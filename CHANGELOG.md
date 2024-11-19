@@ -1,6 +1,8 @@
 # 0.2.3
 
-- Now use `target_files` to represent general compilation products and migrate all from `build` to `run` workspace
+- Now use `target_files` to represent general compilation products which should be migrated from `build` to `run` workspace
+- Add environment variable `PARABUILD_ID` to represent the unique id of the current run worker
+- Optimize the execution process to prevent `text file is busy` error
 
 # 0.2.2
 
