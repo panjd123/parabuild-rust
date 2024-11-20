@@ -130,14 +130,14 @@ Options:
           run bash script
       --run-bash-script-file <RUN_BASH_SCRIPT_FILE>
           run bash script file when used together with the `--run-bash-script` option, ignore this option
-  -p, --progress-bar
-          enable progress bar
+  -s, --silent
+          do not show progress bar
   -j, --build-workers <BUILD_WORKERS>
           build workers
   -J, --run-workers <RUN_WORKERS>
           run workers
-      --in-place-template
-          in place template
+      --out-of-place-template
+          seperate template file, as opposed to using the same file to render in place
       --cache
           use cached workspaces, which means we only check the existence of the workspaces, and do not re-init the workspaces. you should make sure the workspaces are correct and up-to-date
   -h, --help

@@ -64,9 +64,9 @@ struct Cli {
     #[arg(long)]
     run_bash_script_file: Option<PathBuf>,
 
-    /// enable progress bar
+    /// do not show progress bar
     #[arg(short, long)]
-    progress_bar: bool,
+    silent: bool,
 
     /// build workers
     #[arg(short = 'j', long)]
@@ -76,9 +76,9 @@ struct Cli {
     #[arg(short = 'J', long)]
     run_workers: Option<isize>,
 
-    /// in place template
+    /// seperate template file, as opposed to using the same file to render in place
     #[arg(long)]
-    in_place_template: bool,
+    out_of_place_template: bool,
 
     /// use cached workspaces, which means we only check the existence of the workspaces, and do not re-init the workspaces.
     /// you should make sure the workspaces are correct and up-to-date.
@@ -150,8 +150,8 @@ fn main() {
         args.template_file,
         &args.target_files,
     )
-    .in_place_template(args.in_place_template)
-    .enable_progress_bar(args.progress_bar)
+    .in_place_template(!args.out_of_place_template)
+    .enable_progress_bar(!args.silent)
     .use_cached_workspace(args.cache);
 
     if let Some(init_bash_script) = init_bash_script {
@@ -177,7 +177,10 @@ fn main() {
         let run_bash_script = std::fs::read_to_string(run_bash_script_file).unwrap();
         parabuilder = parabuilder.run_bash_script(&run_bash_script);
     } else {
-        println!("Warning: no run bash script provided, we will run {} directly", args.target_files[0].to_str().unwrap());
+        println!(
+            "Warning: no run bash script provided, we will run {} directly",
+            args.target_files[0].to_str().unwrap()
+        );
         parabuilder = parabuilder
             .run_bash_script(&format!(r#"./{}"#, args.target_files[0].to_str().unwrap()));
     }

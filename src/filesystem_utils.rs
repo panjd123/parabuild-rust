@@ -44,6 +44,31 @@ where
     Ok(())
 }
 
+pub fn copy_dir_with_rsync(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    let from_ends_with_slash = if from.ends_with("/") {
+        from.to_str().unwrap().to_string()
+    } else {
+        format!("{}/", from.to_str().unwrap())
+    };
+    let to_ends_with_slash = if to.ends_with("/") {
+        to.to_str().unwrap().to_string()
+    } else {
+        format!("{}/", to.to_str().unwrap())
+    };
+    let output = Command::new("rsync")
+        .arg("-a")
+        .arg(from_ends_with_slash)
+        .arg(to_ends_with_slash)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to copy directory: {:?}", output),
+        ));
+    }
+    Ok(())
+}
+
 pub fn wait_until_file_ready(file_path: &Path) -> Result<(), std::io::Error> {
     use std::thread::sleep;
     use std::time::Duration;
@@ -83,15 +108,13 @@ pub fn wait_until_file_ready(file_path: &Path) -> Result<(), std::io::Error> {
 }
 
 pub fn is_command_installed(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .output()
-        .is_ok()
+    Command::new(command).arg("--version").output().is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::tempdir;
 
     const EXAMPLE_PROJECT: &str = crate::test_constants::EXAMPLE_CMAKE_PROJECT_PATH;
@@ -132,5 +155,26 @@ mod tests {
     fn test_is_command_installed() {
         assert!(is_command_installed("ls"));
         assert!(!is_command_installed("ls_not_exist"));
+    }
+
+    #[test]
+    fn test_copy_dir_with_rsync() {
+        let working_dir = tempdir().unwrap().into_path();
+        let file1_path = working_dir.join("file1");
+        let file2_path = working_dir.join("file2");
+        let mut file1 = std::fs::File::create(&file1_path).unwrap();
+        let mut file2 = std::fs::File::create(&file2_path).unwrap();
+        file1.write_all(b"file1").unwrap();
+        file2.write_all(b"file2").unwrap();
+        file1.sync_all().unwrap();
+        file2.sync_all().unwrap();
+        let destination = tempdir().unwrap().into_path();
+        copy_dir_with_rsync(&working_dir, &destination).unwrap();
+        let file1_destination = destination.join("file1");
+        let file2_destination = destination.join("file2");
+        println!("file1_source: {:?}", file1_path);
+        println!("file1_destination: {:?}", file1_destination);
+        assert!(file1_destination.exists());
+        assert!(file2_destination.exists());
     }
 }
