@@ -1,16 +1,14 @@
-#include <iostream>
 #include <unistd.h>
+#include <iostream>
 
 template <int n>
-void print()
-{
+void print() {
     std::cout << "Sleeping for 0.3 second" << std::endl;
     usleep(300000);
     std::cout << n << std::endl;
 }
 
-int main()
-{
+int main() {
 #ifndef PARABUILD
     print<42>();
 #else

@@ -55,8 +55,16 @@ pub fn copy_dir_with_rsync(from: &Path, to: &Path) -> Result<(), std::io::Error>
     } else {
         format!("{}/", to.to_str().unwrap())
     };
-    let output = Command::new("rsync")
-        .arg("-a")
+    let gitignore_file = from.join(".gitignore");
+    let mut output = Command::new("rsync");
+    output.arg("-a");
+    if gitignore_file.exists() {
+        output.arg(format!(
+            "--exclude-from={}",
+            gitignore_file.to_str().unwrap()
+        ));
+    }
+    let output = output
         .arg(from_ends_with_slash)
         .arg(to_ends_with_slash)
         .output()?;
@@ -159,23 +167,35 @@ mod tests {
 
     #[test]
     fn test_copy_dir_with_rsync() {
+        fn get_mtime(path: &Path) -> std::io::Result<std::time::SystemTime> {
+            std::fs::metadata(path).map(|meta| meta.modified())?
+        }
+        let example_project_dir = Path::new(crate::test_constants::EXAMPLE_CMAKE_PROJECT_PATH);
         let working_dir = tempdir().unwrap().into_path();
-        let file1_path = working_dir.join("file1");
-        let file2_path = working_dir.join("file2");
-        let mut file1 = std::fs::File::create(&file1_path).unwrap();
-        let mut file2 = std::fs::File::create(&file2_path).unwrap();
-        file1.write_all(b"file1").unwrap();
-        file2.write_all(b"file2").unwrap();
-        file1.sync_all().unwrap();
-        file2.sync_all().unwrap();
+        copy_dir(example_project_dir, &working_dir).unwrap();
+        let ignore_path = working_dir.join("src/example.ignore");
+        assert!(ignore_path.exists());
+        let file_path = working_dir.join("src/example.cpp");
+        let main_path = working_dir.join("src/main.cpp");
+        let main_old_mtime = get_mtime(&main_path).unwrap();
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        write!(file, "Hello, ").unwrap();
+        file.sync_all().unwrap();
         let destination = tempdir().unwrap().into_path();
         copy_dir_with_rsync(&working_dir, &destination).unwrap();
-        let file1_destination = destination.join("file1");
-        let file2_destination = destination.join("file2");
-        println!("file1_source: {:?}", file1_path);
-        println!("file1_destination: {:?}", file1_destination);
-        assert!(file1_destination.exists());
-        assert!(file2_destination.exists());
+        let ignore_destination = destination.join("src/example.ignore");
+        let file_destination = destination.join("src/example.cpp");
+        let main_destination = destination.join("src/main.cpp");
+        assert!(!ignore_destination.exists());
+        assert!(file_destination.exists());
+        writeln!(file, "world!").unwrap();
+        file.sync_all().unwrap();
+        copy_dir_with_rsync(&working_dir, &destination).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(file_destination).unwrap(),
+            "Hello, world!\n"
+        );
+        assert_eq!(main_old_mtime, get_mtime(&main_destination).unwrap(),);
         std::fs::remove_dir_all(working_dir).unwrap();
         std::fs::remove_dir_all(destination).unwrap();
     }

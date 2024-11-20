@@ -1,3 +1,8 @@
+# 0.2.4
+
+- Use rsync by default
+- Modify some default parameters
+
 # 0.2.3
 
 - Now use `target_files` to represent general compilation products which should be migrated from `build` to `run` workspace

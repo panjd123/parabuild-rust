@@ -18,8 +18,7 @@ fn main() {
     )
     .in_place_template(true)
     .build_workers(2)
-    .run_method(RunMethod::OutOfPlace(7))
-    .enable_progress_bar(true);
+    .run_method(RunMethod::OutOfPlace(7));
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
     parabuilder.run().unwrap();

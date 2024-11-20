@@ -12,19 +12,24 @@ Parabuild is a Rust tool that helps you compile complex (single file) projects i
 
 The following is an example of how to use parabuild-rust to compile a C++ project.
 
+We suggest that you install `lsof` and `rsync`.
+
+```
+sudo apt update
+sudo apt install -y lsof rsync
+```
+
 We use [handlebars templating language](https://handlebarsjs.com/) to generate source file, here is an example:
 
 ```cpp
 #include <iostream>
 
 template <int n>
-void print()
-{
+void print(){
     std::cout << n << std::endl;
 }
 
-int main()
-{
+int main(){
     print<{{N}}>();
     return 0;
 }
@@ -136,10 +141,12 @@ Options:
           build workers
   -J, --run-workers <RUN_WORKERS>
           run workers
-      --out-of-place-template
+      --seperate-template
           seperate template file, as opposed to using the same file to render in place
-      --cache
-          use cached workspaces, which means we only check the existence of the workspaces, and do not re-init the workspaces. you should make sure the workspaces are correct and up-to-date
+      --no-cache
+          Clear the contents in `workspaces` before running
+      --without-rsync
+          do not use rsync, which means you will not be able to use incremental replication, which may require you to use -- no cache every time you modify the project
   -h, --help
           Print help (see more with '--help')
   -V, --version

@@ -1,5 +1,5 @@
-#include <iostream>
 #include <cuda_runtime.h>
+#include <iostream>
 
 __global__ void sleep_kernel(int64_t num_cycles, int64_t clock_rate) {
     int64_t start = clock64();
@@ -26,7 +26,7 @@ int main() {
 
     sleep_kernel<<<1, 1>>>(num_cycles, clock_rate);
     cudaDeviceSynchronize();
-    
+
     std::cout << "Slept for " << sleep_seconds << " seconds" << std::endl;
     return 0;
 }

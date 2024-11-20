@@ -5,13 +5,11 @@
 #endif
 
 template <int n>
-void print()
-{
+void print() {
     std::cout << n << std::endl;
 }
 
-int main()
-{
+int main() {
     print<N>();
     return 0;
 }

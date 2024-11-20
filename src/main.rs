@@ -78,12 +78,16 @@ struct Cli {
 
     /// seperate template file, as opposed to using the same file to render in place
     #[arg(long)]
-    out_of_place_template: bool,
+    seperate_template: bool,
 
-    /// use cached workspaces, which means we only check the existence of the workspaces, and do not re-init the workspaces.
-    /// you should make sure the workspaces are correct and up-to-date.
+    /// Clear the contents in `workspaces` before running
     #[arg(long)]
-    cache: bool,
+    no_cache: bool,
+
+    /// do not use rsync, which means you will not be able to use incremental replication,
+    /// which may require you to use -- no cache every time you modify the project
+    #[arg(long)]
+    without_rsync: bool,
 }
 
 fn _command_platform_specific_behavior_check() {
@@ -150,9 +154,10 @@ fn main() {
         args.template_file,
         &args.target_files,
     )
-    .in_place_template(!args.out_of_place_template)
-    .enable_progress_bar(!args.silent)
-    .use_cached_workspace(args.cache);
+    .in_place_template(!args.seperate_template)
+    .disable_progress_bar(args.silent)
+    .no_cache(args.no_cache)
+    .without_rsync(args.without_rsync);
 
     if let Some(init_bash_script) = init_bash_script {
         parabuilder = parabuilder.init_bash_script(&init_bash_script);

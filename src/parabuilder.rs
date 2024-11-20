@@ -1,6 +1,7 @@
-use crate::cuda_utils::get_cuda_device_uuids;
+use crate::cuda_utils::get_cuda_mig_device_uuids;
 use crate::filesystem_utils::{
-    copy_dir, copy_dir_with_ignore, is_command_installed, wait_until_file_ready,
+    copy_dir, copy_dir_with_ignore, copy_dir_with_rsync, is_command_installed,
+    wait_until_file_ready,
 };
 use crate::handlebars_helper::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -44,7 +45,7 @@ pub enum RunMethod {
 static CUDA_DEVICE_UUIDS: OnceLock<Vec<String>> = OnceLock::new();
 
 fn get_cuda_device_uuid(id: usize) -> Option<String> {
-    let cuda_device_uuids = CUDA_DEVICE_UUIDS.get_or_init(|| get_cuda_device_uuids());
+    let cuda_device_uuids = CUDA_DEVICE_UUIDS.get_or_init(|| get_cuda_mig_device_uuids());
     if id < cuda_device_uuids.len() {
         Some(cuda_device_uuids[id].clone())
     } else {
@@ -71,9 +72,10 @@ pub struct Parabuilder {
     compilation_error_handling_method: CompliationErrorHandlingMethod,
     auto_gather_array_data: bool,
     in_place_template: bool,
-    enable_progress_bar: bool,
+    disable_progress_bar: bool,
     mpb: MultiProgress,
-    use_cached_workspace: bool,
+    no_cache: bool,
+    without_rsync: bool,
 }
 
 fn run_func_data_pre_(
@@ -90,24 +92,16 @@ fn run_func_data_pre_(
         .split('_')
         .last()
         .unwrap();
-    let output = if let Some(mig_uuid) = get_cuda_device_uuid(workspace_id.parse().unwrap()) {
-        Command::new("bash")
-            .arg("-c")
-            .arg(run_script)
-            .env("PARABUILD_ID", workspace_id)
-            .env("CUDA_VISIBLE_DEVICES", mig_uuid)
-            .current_dir(&workspace_path)
-            .output()
-            .unwrap()
-    } else {
-        Command::new("bash")
-            .arg("-c")
-            .arg(run_script)
-            .env("PARABUILD_ID", workspace_id)
-            .current_dir(&workspace_path)
-            .output()
-            .unwrap()
-    };
+    let mut output = Command::new("bash");
+    output
+        .arg("-c")
+        .arg(run_script)
+        .env("PARABUILD_ID", workspace_id);
+    if let Some(mig_uuid) = get_cuda_device_uuid(workspace_id.parse().unwrap()) {
+        output.env("CUDA_VISIBLE_DEVICES", mig_uuid);
+    }
+    output.current_dir(&workspace_path);
+    let output = output.output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     let this_data = json! {
@@ -244,9 +238,10 @@ impl Parabuilder {
             compilation_error_handling_method: CompliationErrorHandlingMethod::Collect,
             auto_gather_array_data: true,
             in_place_template: false,
-            enable_progress_bar: false,
+            disable_progress_bar: false,
             mpb: MultiProgress::new(),
-            use_cached_workspace: false,
+            no_cache: false,
+            without_rsync: false,
         }
     }
 
@@ -326,16 +321,22 @@ impl Parabuilder {
         self
     }
 
-    pub fn enable_progress_bar(mut self, enable_progress_bar: bool) -> Self {
-        self.enable_progress_bar = enable_progress_bar;
+    pub fn disable_progress_bar(mut self, disable_progress_bar: bool) -> Self {
+        self.disable_progress_bar = disable_progress_bar;
         self
     }
 
-    pub fn use_cached_workspace(mut self, use_cached_workspace: bool) -> Self {
-        self.use_cached_workspace = use_cached_workspace;
+    pub fn no_cache(mut self, no_cache: bool) -> Self {
+        self.no_cache = no_cache;
         self
     }
 
+    pub fn without_rsync(mut self, without_rsync: bool) -> Self {
+        self.without_rsync = without_rsync;
+        self
+    }
+
+    /// Set datas to be rendered into the template
     pub fn set_datas(&mut self, datas: Vec<JsonValue>) -> Result<(), Box<dyn Error>> {
         if self.data_queue_receiver.is_some() {
             return Err("Data queue receiver is already initialized".into());
@@ -357,36 +358,28 @@ impl Parabuilder {
         Ok(data_queue_sender)
     }
 
+    /// Initialize workspaces
     pub fn init_workspace(&self) -> Result<(), Box<dyn Error>> {
         let out_of_place_run_workers = match self.run_method {
             RunMethod::OutOfPlace(run_workers) => run_workers,
             RunMethod::Exclusive => 1,
             _ => 0,
         };
-        if self.use_cached_workspace {
-            for i in 0..self.build_workers {
-                let workspace_path = self.workspaces_path.join(format!("workspace_{}", i));
-                if !workspace_path.exists() {
-                    return Err(format!("Workspace {:?} does not exist", workspace_path).into());
-                }
-            }
-            for i in 0..out_of_place_run_workers {
-                let workspace_path = self.workspaces_path.join(format!("workspace_exe_{}", i));
-                if !workspace_path.exists() {
-                    return Err(format!("Workspace {:?} does not exist", workspace_path).into());
-                }
-            }
-            return Ok(());
-        }
         let workspaces_path = if self.workspaces_path.is_absolute() {
             self.workspaces_path.clone()
         } else {
             env::current_dir().unwrap().join(&self.workspaces_path)
         };
+        if self.no_cache {
+            if self.workspaces_path.exists() {
+                std::fs::remove_dir_all(&self.workspaces_path).unwrap();
+            }
+        }
+        std::fs::create_dir_all(&workspaces_path).unwrap();
         let mut project_path = self.project_path.clone();
-        let move_to_temp_dir =
-            workspaces_path.starts_with(std::fs::canonicalize(&self.project_path).unwrap());
-
+        let move_to_temp_dir = workspaces_path
+            .starts_with(std::fs::canonicalize(&self.project_path).unwrap())
+            && self.without_rsync;
         let mut build_handles = vec![];
         if move_to_temp_dir {
             self.add_spinner("copying to temp dir");
@@ -398,17 +391,22 @@ impl Parabuilder {
             let destination = self.workspaces_path.join(destination);
             let init_bash_script = self.init_bash_script.clone();
             let mpb = self.mpb.clone();
-            let enable_progress_bar = self.enable_progress_bar;
+            let disable_progress_bar = self.disable_progress_bar;
+            let without_rsync = self.without_rsync;
             let handle = std::thread::spawn(move || {
                 let sp = Self::add_spinner2(
-                    enable_progress_bar,
+                    disable_progress_bar,
                     &mpb,
                     format!("init workspace {}: copying", i),
                 );
                 if move_to_temp_dir {
                     copy_dir(&source, &destination).unwrap();
                 } else {
-                    copy_dir_with_ignore(&source, &destination).unwrap();
+                    if without_rsync {
+                        copy_dir_with_ignore(&source, &destination).unwrap();
+                    } else {
+                        copy_dir_with_rsync(&source, &destination).unwrap();
+                    }
                 }
                 sp.set_message(format!("init workspace {}: init", i));
                 Command::new("bash")
@@ -433,26 +431,43 @@ impl Parabuilder {
                 // let compile_bash_script = self.compile_bash_script.clone();
                 // let in_place_template = self.in_place_template;
                 let mpb = self.mpb.clone();
-                let enable_progress_bar = self.enable_progress_bar;
+                let disable_progress_bar = self.disable_progress_bar;
+                let without_rsync = self.without_rsync;
                 let handle = std::thread::spawn(move || {
                     let sp = Self::add_spinner2(
-                        enable_progress_bar,
+                        disable_progress_bar,
                         &mpb,
                         format!("init workspace_run {}: copying", i),
                     );
                     if move_to_temp_dir {
                         copy_dir(&source, &destination).unwrap();
                     } else {
-                        copy_dir_with_ignore(&source, &destination).unwrap();
+                        if without_rsync {
+                            copy_dir_with_ignore(&source, &destination).unwrap();
+                        } else {
+                            copy_dir_with_rsync(&source, &destination).unwrap();
+                        }
                     }
                     sp.set_message(format!("init workspace_run {}: init", i));
-                    let output = Command::new("bash")
+                    match Command::new("bash")
                         .arg("-c")
                         .arg(&init_bash_script)
                         .current_dir(&destination)
                         .output()
-                        .unwrap();
-                    assert!(output.status.success());
+                    {
+                        Ok(output) => {
+                            if !output.status.success() {
+                                panic!(
+                                    "Init bash script failed in workspace_run_{}: {:?}",
+                                    i, output
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            panic!("Init bash script failed in workspace_run_{}: {:?}", i, e);
+                        }
+                    }
+                    // assert!(output.status.success());
                     // let output = Command::new("bash")
                     //     .arg("-c")
                     //     .arg(&compile_bash_script)
@@ -477,6 +492,7 @@ impl Parabuilder {
         Ok(())
     }
 
+    /// run the build system
     pub fn run(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
         if !self.data_queue_receiver.is_some() {
             return Err("Data queue receiver is not initialized".into());
@@ -485,7 +501,12 @@ impl Parabuilder {
             return Err("bash is not installed".into());
         }
         if !is_command_installed("lsof") {
-            return Err("lsof is not installed".into());
+            return Err("lsof is not installed, which may lead to strange problems that are difficult to reproduce".into());
+        }
+        if !is_command_installed("rsync") {
+            if !self.without_rsync {
+                return Err("rsync is not installed, set `without_rsync` to true to ignore".into());
+            }
         }
         let mut build_handles = vec![];
         let mut run_handles = Vec::new();
@@ -713,14 +734,14 @@ impl Parabuilder {
         let target_files_base = self.target_files_base.clone();
         let run_func = self.run_func_data;
         let mut run_data = JsonValue::Null;
-        let enable_progress_bar = self.enable_progress_bar;
+        let disable_progress_bar = self.disable_progress_bar;
         let mpb = self.mpb.clone();
         let run_bash_script = self.run_bash_script.clone();
         let temp_target_path_dir = self.temp_target_path_dir.clone();
         std::thread::spawn(move || {
             let mut last_data = JsonValue::Null;
             let sp = Self::add_spinner2(
-                enable_progress_bar,
+                disable_progress_bar,
                 &mpb,
                 serde_json::to_string_pretty(&last_data).unwrap(),
             );
@@ -778,7 +799,7 @@ impl Parabuilder {
         total: u64,
         finish_message: F,
     ) -> ProgressBar {
-        if !self.enable_progress_bar {
+        if self.disable_progress_bar {
             return ProgressBar::hidden();
         }
         let sty = ProgressStyle::with_template(
@@ -794,7 +815,7 @@ impl Parabuilder {
     }
 
     fn add_spinner<S: Into<String>>(&self, message: S) -> ProgressBar {
-        if !self.enable_progress_bar {
+        if self.disable_progress_bar {
             return ProgressBar::hidden();
         }
         let sp = self
@@ -805,11 +826,11 @@ impl Parabuilder {
     }
 
     fn add_spinner2<S: Into<String>>(
-        enable_progress_bar: bool,
+        disable_progress_bar: bool,
         mpb: &MultiProgress,
         message: S,
     ) -> ProgressBar {
-        if !enable_progress_bar {
+        if disable_progress_bar {
             return ProgressBar::hidden();
         }
         let sp = mpb.add(ProgressBar::new_spinner().with_message(message.into()));
@@ -861,7 +882,9 @@ mod tests {
             r#"
             cmake --build build --target all -- -B
             "#,
-        );
+        )
+        .disable_progress_bar(true)
+        .no_cache(true);
         parabuilder.init_workspace().unwrap();
         assert!(workspaces_path
             .join(format!(
@@ -911,6 +934,7 @@ mod tests {
         .build_workers(build_workers)
         .run_method(run_method)
         .run_func(PANIC_ON_ERROR_DEFAULT_RUN_FUNC)
+        .disable_progress_bar(true)
         .compilation_error_handling_method(CompliationErrorHandlingMethod::Collect)
         .in_place_template(in_place_template)
         .auto_gather_array_data(true);

@@ -31,8 +31,8 @@ fn main() {
     .auto_gather_array_data(true) // when each run thread finishes, gather the data into one array when every thread returns an array
     .run_func(IGNORE_ON_ERROR_DEFAULT_RUN_FUNC)
     .in_place_template(false)
-    .enable_progress_bar(true);
-    // use custom run function
+    .disable_progress_bar(false);
+    // let sender = parabuilder.get_data_queue_sender().unwrap();
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
     let (run_data, compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();

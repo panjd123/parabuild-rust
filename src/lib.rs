@@ -177,7 +177,7 @@ mod cuda_utils;
 mod filesystem_utils;
 mod handlebars_helper;
 mod parabuilder;
-pub use cuda_utils::get_cuda_device_uuids;
+pub use cuda_utils::get_cuda_mig_device_uuids;
 pub use parabuilder::{
     CompliationErrorHandlingMethod, Parabuilder, RunMethod, IGNORE_ON_ERROR_DEFAULT_RUN_FUNC,
     PANIC_ON_ERROR_DEFAULT_RUN_FUNC,
