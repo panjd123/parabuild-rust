@@ -176,5 +176,7 @@ mod tests {
         println!("file1_destination: {:?}", file1_destination);
         assert!(file1_destination.exists());
         assert!(file2_destination.exists());
+        std::fs::remove_dir_all(working_dir).unwrap();
+        std::fs::remove_dir_all(destination).unwrap();
     }
 }

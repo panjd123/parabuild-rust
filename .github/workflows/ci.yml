@@ -8,5 +8,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get install -y rsync
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo test --all-features
