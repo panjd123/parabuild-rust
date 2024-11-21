@@ -37,21 +37,29 @@ struct Cli {
     #[arg(short, long)]
     output_file: Option<PathBuf>,
 
-    /// init bash script file
+    /// init bash script
+    #[arg(long)]
+    init_bash_script: Option<String>,
+
+    /// init bash script file, when used together with the `--init-bash-script` option, ignore this option
     #[arg(long)]
     init_bash_script_file: Option<PathBuf>,
 
-    /// init cmake args
+    /// init cmake args, when used together with the `--init-bash-script` or `--init-bash-script-file` option, ignore this option
     ///
-    /// e.g. "-DCMAKE_BUILD_TYPE=Release", when used together with the `--init-bash-script-file` option, ignore this option
+    /// e.g. "-DCMAKE_BUILD_TYPE=Release"
     #[arg(short, long)]
     init_cmake_args: Option<String>,
 
-    /// compile bash script file
+    /// compile bash script
+    #[arg(long)]
+    compile_bash_script: Option<String>,
+
+    /// compile bash script file, when used together with the `--compile-bash-script` option, ignore this option
     #[arg(long)]
     compile_bash_script_file: Option<PathBuf>,
 
-    /// make target, when used together with the `--compile-bash-script-file` option, ignore this option
+    /// make target, when used together with the `--compile-bash-script` or `--compile-bash-script-file` option, ignore this option
     #[arg(short, long)]
     make_target: Option<String>,
 
@@ -137,7 +145,9 @@ fn main() {
     }
     let datas = data.as_array().unwrap().to_owned();
 
-    let init_bash_script = if let Some(init_bash_script_file) = args.init_bash_script_file {
+    let init_bash_script = if let Some(init_bash_script) = args.init_bash_script {
+        Some(init_bash_script)
+    } else if let Some(init_bash_script_file) = args.init_bash_script_file {
         Some(std::fs::read_to_string(init_bash_script_file).unwrap())
     } else if let Some(init_cmake_args) = args.init_cmake_args {
         Some(format!(
@@ -163,8 +173,9 @@ fn main() {
         parabuilder = parabuilder.init_bash_script(&init_bash_script);
     }
 
-    let compile_bash_script = if let Some(compile_bash_script_file) = args.compile_bash_script_file
-    {
+    let compile_bash_script = if let Some(compile_bash_script) = args.compile_bash_script {
+        Some(compile_bash_script)
+    } else if let Some(compile_bash_script_file) = args.compile_bash_script_file {
         Some(std::fs::read_to_string(compile_bash_script_file).unwrap())
     } else if let Some(target) = args.make_target {
         Some(format!(r#"cmake --build build --target {} -- -B"#, target))
