@@ -122,14 +122,18 @@ Options:
           json format data file, when used together with the `--data` option, ignore this option
   -o, --output-file <OUTPUT_FILE>
           output the json format result to a file, default to stdout
+      --init-bash-script <INIT_BASH_SCRIPT>
+          init bash script
       --init-bash-script-file <INIT_BASH_SCRIPT_FILE>
-          init bash script file
+          init bash script file, when used together with the `--init-bash-script` option, ignore this option
   -i, --init-cmake-args <INIT_CMAKE_ARGS>
-          init cmake args
+          init cmake args, when used together with the `--init-bash-script` or `--init-bash-script-file` option, ignore this option
+      --compile-bash-script <COMPILE_BASH_SCRIPT>
+          compile bash script
       --compile-bash-script-file <COMPILE_BASH_SCRIPT_FILE>
-          compile bash script file
+          compile bash script file, when used together with the `--compile-bash-script` option, ignore this option
   -m, --make-target <MAKE_TARGET>
-          make target, when used together with the `--compile-bash-script-file` option, ignore this option
+          make target, when used together with the `--compile-bash-script` or `--compile-bash-script-file` option, ignore this option
       --run-bash-script <RUN_BASH_SCRIPT>
           run bash script
       --run-bash-script-file <RUN_BASH_SCRIPT_FILE>
