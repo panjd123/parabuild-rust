@@ -93,7 +93,7 @@ struct Cli {
     no_cache: bool,
 
     /// do not use rsync, which means you will not be able to use incremental replication,
-    /// which may require you to use -- no cache every time you modify the project
+    /// which may require you to use `--no-cache` every time you modify the project
     #[arg(long)]
     without_rsync: bool,
 }

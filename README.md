@@ -149,7 +149,7 @@ Options:
       --no-cache
           Clear the contents in `workspaces` before running
       --without-rsync
-          do not use rsync, which means you will not be able to use incremental replication, which may require you to use -- no cache every time you modify the project
+          do not use rsync, which means you will not be able to use incremental replication, which may require you to use `--no-cache` every time you modify the project
   -h, --help
           Print help (see more with '--help')
   -V, --version
