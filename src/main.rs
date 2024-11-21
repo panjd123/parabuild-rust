@@ -198,9 +198,10 @@ fn main() {
         parabuilder = parabuilder.run_workers(run_workers);
     }
 
+    let datas_len = datas.len();
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    let (run_data, _compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
+    let (run_data, compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
 
     if let Some(output_file) = args.output_file {
         std::fs::write(
@@ -210,5 +211,31 @@ fn main() {
         .unwrap();
     } else {
         println!("{}", serde_json::to_string_pretty(&run_data).unwrap());
+    }
+
+    println!("Compilation Summary");
+    println!("===================");
+    println!(
+        "Success: {}\tFailed: {}",
+        datas_len - compile_error_datas.len(),
+        compile_error_datas.len()
+    );
+    println!();
+    println!("Execution Summary");
+    println!("===================");
+    if run_data.is_array()
+        && run_data.as_array().unwrap()[0].is_object()
+        && !run_data.as_array().unwrap()[0]["status"].is_null()
+    {
+        let success = run_data
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|data| data["status"].as_i64().unwrap() == 0)
+            .count();
+        let failed = run_data.as_array().unwrap().len() - success;
+        println!("Success: {}\tFailed: {}", success, failed);
+    } else {
+        println!("Unknown run_data format, please check the output")
     }
 }
