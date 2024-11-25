@@ -95,9 +95,15 @@ We also provide a command line tool to compile the project. You can use `cargo i
 ```shell
 parabuild \
     tests/example_cmake_project \
-    src/main.cpp \
     build/main \
+    -t src/main.cpp \
     --data '[{"N": 10}, {"N": 20}]'
+
+parabuild \
+    tests/example_makefile_project \
+    main \
+    --data '[{"N": 10}, {"N": 20}]' \
+    --makefile
 ```
 
 ### Help
@@ -106,52 +112,89 @@ parabuild \
 $ parabuild --help
 A parallel build utility for template heavy projects.
 
-Usage: parabuild [OPTIONS] <PROJECT_PATH> <TEMPLATE_FILE> [TARGET_FILES]...
+Usage: parabuild [OPTIONS] <PROJECT_PATH> [TARGET_FILES]...
 
 Arguments:
-  <PROJECT_PATH>     project path
-  <TEMPLATE_FILE>    template file in the project
-  [TARGET_FILES]...  target files in the project, which will be moved between build/run workspaces for further processing
+  <PROJECT_PATH>
+          project path
+
+  [TARGET_FILES]...
+          target files in the project, which will be moved between build/run workspaces for further processing
+          
+          e.g. `build/main,data_generate_when_build`
 
 Options:
+  -t, --template-file <TEMPLATE_FILE>
+          template file in the project
+
   -w, --workspaces-path <WORKSPACES_PATH>
-          where to store the workspaces, executables, etc [default: workspaces]
+          where to store the workspaces, executables, etc
+          
+          [default: workspaces]
+
       --data <DATA>
           json format data
+
   -d, --data-file <DATA_FILE>
           json format data file, when used together with the `--data` option, ignore this option
+
   -o, --output-file <OUTPUT_FILE>
           output the json format result to a file, default to stdout
+
       --init-bash-script <INIT_BASH_SCRIPT>
           init bash script
+
       --init-bash-script-file <INIT_BASH_SCRIPT_FILE>
           init bash script file, when used together with the `--init-bash-script` option, ignore this option
+
   -i, --init-cmake-args <INIT_CMAKE_ARGS>
           init cmake args, when used together with the `--init-bash-script` or `--init-bash-script-file` option, ignore this option
+          
+          e.g. "-DCMAKE_BUILD_TYPE=Release"
+
       --compile-bash-script <COMPILE_BASH_SCRIPT>
           compile bash script
+
       --compile-bash-script-file <COMPILE_BASH_SCRIPT_FILE>
           compile bash script file, when used together with the `--compile-bash-script` option, ignore this option
+
   -m, --make-target <MAKE_TARGET>
           make target, when used together with the `--compile-bash-script` or `--compile-bash-script-file` option, ignore this option
+
       --run-bash-script <RUN_BASH_SCRIPT>
           run bash script
+
       --run-bash-script-file <RUN_BASH_SCRIPT_FILE>
           run bash script file when used together with the `--run-bash-script` option, ignore this option
+
   -s, --silent
           do not show progress bar
+
   -j, --build-workers <BUILD_WORKERS>
           build workers
+
   -J, --run-workers <RUN_WORKERS>
           run workers
+
       --seperate-template
           seperate template file, as opposed to using the same file to render in place
+
       --no-cache
           Clear the contents in `workspaces` before running
+
       --without-rsync
           do not use rsync, which means you will not be able to use incremental replication, which may require you to use `--no-cache` every time you modify the project
+
+      --makefile
+          Mark that you are actually working on a makefile project
+          
+          pass `data` to `CPPFLAGS` environment variable in the compile bash script
+          
+          e.g. when data is `{"N": 10}`, `CPPFLAGS=-DN=10`
+
   -h, --help
-          Print help (see more with '--help')
+          Print help (see a summary with '-h')
+
   -V, --version
           Print version
 ```

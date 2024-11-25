@@ -1,6 +1,6 @@
 [package]
 name = "parabuild"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 authors = ["Jarden Pan <xm.jarden@gmail.com>"]
 license = "MIT"

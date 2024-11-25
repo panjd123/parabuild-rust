@@ -12,14 +12,15 @@ struct Cli {
     /// project path
     project_path: PathBuf,
 
-    /// template file in the project
-    template_file: PathBuf,
-
     /// target files in the project, which will be moved between build/run workspaces for further processing
     ///
     /// e.g. `build/main,data_generate_when_build`
     #[arg(value_delimiter = ',')]
     target_files: Vec<PathBuf>,
+
+    /// template file in the project
+    #[arg(short, long)]
+    template_file: Option<PathBuf>,
 
     /// where to store the workspaces, executables, etc.
     #[arg(short, long, default_value = "workspaces")]
@@ -96,6 +97,14 @@ struct Cli {
     /// which may require you to use `--no-cache` every time you modify the project
     #[arg(long)]
     without_rsync: bool,
+
+    /// Mark that you are actually working on a makefile project
+    ///
+    /// pass `data` to `CPPFLAGS` environment variable in the compile bash script
+    ///
+    /// e.g. when data is `{"N": 10}`, `CPPFLAGS=-DN=10`
+    #[arg(long)]
+    makefile: bool,
 }
 
 fn _command_platform_specific_behavior_check() {
@@ -155,19 +164,24 @@ fn main() {
             init_cmake_args
         ))
     } else {
-        None
+        if !args.makefile {
+            None
+        } else {
+            Some("".to_string()) // do nothing when using makefile by default
+        }
     };
 
     let mut parabuilder = Parabuilder::new(
         args.project_path,
         args.workspaces_path,
-        args.template_file,
+        args.template_file.unwrap_or_else(|| PathBuf::from("")),
         &args.target_files,
     )
     .in_place_template(!args.seperate_template)
     .disable_progress_bar(args.silent)
     .no_cache(args.no_cache)
-    .without_rsync(args.without_rsync);
+    .without_rsync(args.without_rsync)
+    .enable_cppflags(args.makefile);
 
     if let Some(init_bash_script) = init_bash_script {
         parabuilder = parabuilder.init_bash_script(&init_bash_script);
@@ -178,9 +192,17 @@ fn main() {
     } else if let Some(compile_bash_script_file) = args.compile_bash_script_file {
         Some(std::fs::read_to_string(compile_bash_script_file).unwrap())
     } else if let Some(target) = args.make_target {
-        Some(format!(r#"cmake --build build --target {} -- -B"#, target))
+        if !args.makefile {
+            Some(format!(r#"cmake --build build --target {} -- -B"#, target))
+        } else {
+            Some(format!(r#"make {} -B"#, target))
+        }
     } else {
-        None
+        if !args.makefile {
+            None
+        } else {
+            Some("make -B".to_string())
+        }
     };
 
     if let Some(compile_bash_script) = compile_bash_script {
