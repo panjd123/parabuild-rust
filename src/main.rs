@@ -7,7 +7,7 @@ use std::process::Command;
 use std::{path::PathBuf, str::FromStr};
 
 #[derive(Parser)]
-#[command(version, author, about, long_about = None)]
+#[command(version, author, about, long_about)]
 struct Cli {
     /// project path
     project_path: PathBuf,
@@ -127,6 +127,9 @@ struct Cli {
     /// panic on compile error
     #[arg(long)]
     panic_on_compile_error: bool,
+
+    #[arg(long)]
+    format_output: bool,
 }
 
 fn _command_platform_specific_behavior_check() {
@@ -270,7 +273,24 @@ fn main() {
         )
         .unwrap();
     } else {
-        println!("{}", serde_json::to_string_pretty(&run_data).unwrap());
+        if args.format_output {
+            for data in run_data.as_array().unwrap().iter() {
+                println!("data:");
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        data.as_object().unwrap()["data"].as_object().unwrap()
+                    )
+                    .unwrap()
+                );
+                let stdout = data.as_object().unwrap()["stdout"].as_str().unwrap();
+                println!("stdout:");
+                println!("{}", stdout);
+                println!();
+            }
+        } else {
+            println!("{}", serde_json::to_string_pretty(&run_data).unwrap());
+        }
     }
 
     println!("Compilation Summary");

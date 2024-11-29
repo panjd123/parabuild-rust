@@ -175,6 +175,16 @@ Options:
 
   -J, --run-workers <RUN_WORKERS>
           run workers
+          
+          We have three execution modes: 1. separate and parallel 2. separate and serial 3. execute immediately in place
+          
+          The default behavior is the first one, which means we will move TARGET_FILES between build/run workspaces.
+          
+          The second behavior is similar to the first, but the difference is that we only start running after all the compilation work is completed.
+          
+          The third method is quite unique, as it does not move the TARGET_FILES and immediately executes the compilation of a workspace in its original location.
+          
+          To specify these three working modes through the command line: 1. positive numbers represent the first 2. negative numbers represent the second 3. `-build_workers` represent the third, e.g. `-j 4 -J -4`
 
       --seperate-template
           seperate template file, as opposed to using the same file to render in place
@@ -191,6 +201,12 @@ Options:
           pass `data` to `CPPFLAGS` environment variable in the compile bash script
           
           e.g. when data is `{"N": 10}`, `CPPFLAGS=-DN=10`
+
+      --panic-on-compile-error
+          panic on compile error
+
+      --format-output
+          
 
   -h, --help
           Print help (see a summary with '-h')
