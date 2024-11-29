@@ -1,5 +1,5 @@
 use clap::Parser;
-use parabuild::Parabuilder;
+use parabuild::{CompliationErrorHandlingMethod, Parabuilder};
 use serde_json::Value as JsonValue;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -73,6 +73,24 @@ struct Cli {
     build_workers: Option<usize>,
 
     /// run workers
+    ///
+    /// We have three execution modes:
+    /// 1. separate and parallel
+    /// 2. separate and serial
+    /// 3. execute immediately in place
+    ///
+    /// The default behavior is the first one, which means we will move TARGET_FILES between build/run workspaces.
+    ///
+    /// The second behavior is similar to the first,
+    /// but the difference is that we only start running after all the compilation work is completed.
+    ///
+    /// The third method is quite unique, as it does not move the TARGET_FILES and
+    /// immediately executes the compilation of a workspace in its original location.
+    ///
+    /// To specify these three working modes through the command line:
+    /// 1. positive numbers represent the first
+    /// 2. negative numbers represent the second
+    /// 3. `-build_workers` represent the third, e.g. `-j 4 -J -4`
     #[arg(short = 'J', long)]
     run_workers: Option<isize>,
 
@@ -88,6 +106,10 @@ struct Cli {
     /// which may require you to use -- no cache every time you modify the project
     #[arg(long)]
     without_rsync: bool,
+
+    /// panic on compile error
+    #[arg(long)]
+    panic_on_compile_error: bool,
 }
 
 fn _command_platform_specific_behavior_check() {
@@ -157,7 +179,12 @@ fn main() {
     .in_place_template(!args.seperate_template)
     .disable_progress_bar(args.silent)
     .no_cache(args.no_cache)
-    .without_rsync(args.without_rsync);
+    .without_rsync(args.without_rsync)
+    .compilation_error_handling_method(if args.panic_on_compile_error {
+        CompliationErrorHandlingMethod::Panic
+    } else {
+        CompliationErrorHandlingMethod::Collect
+    });
 
     if let Some(init_bash_script) = init_bash_script {
         parabuilder = parabuilder.init_bash_script(&init_bash_script);
