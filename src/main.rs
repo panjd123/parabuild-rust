@@ -12,14 +12,15 @@ struct Cli {
     /// project path
     project_path: PathBuf,
 
-    /// template file in the project
-    template_file: PathBuf,
-
     /// target files in the project, which will be moved between build/run workspaces for further processing
     ///
     /// e.g. `build/main,data_generate_when_build`
     #[arg(value_delimiter = ',')]
     target_files: Vec<PathBuf>,
+
+    /// template file in the project
+    #[arg(short, long)]
+    template_file: Option<PathBuf>,
 
     /// where to store the workspaces, executables, etc.
     #[arg(short, long, default_value = "workspaces")]
@@ -37,21 +38,29 @@ struct Cli {
     #[arg(short, long)]
     output_file: Option<PathBuf>,
 
-    /// init bash script file
+    /// init bash script
+    #[arg(long)]
+    init_bash_script: Option<String>,
+
+    /// init bash script file, when used together with the `--init-bash-script` option, ignore this option
     #[arg(long)]
     init_bash_script_file: Option<PathBuf>,
 
-    /// init cmake args
+    /// init cmake args, when used together with the `--init-bash-script` or `--init-bash-script-file` option, ignore this option
     ///
-    /// e.g. "-DCMAKE_BUILD_TYPE=Release", when used together with the `--init-bash-script-file` option, ignore this option
+    /// e.g. "-DCMAKE_BUILD_TYPE=Release"
     #[arg(short, long)]
     init_cmake_args: Option<String>,
 
-    /// compile bash script file
+    /// compile bash script
+    #[arg(long)]
+    compile_bash_script: Option<String>,
+
+    /// compile bash script file, when used together with the `--compile-bash-script` option, ignore this option
     #[arg(long)]
     compile_bash_script_file: Option<PathBuf>,
 
-    /// make target, when used together with the `--compile-bash-script-file` option, ignore this option
+    /// make target, when used together with the `--compile-bash-script` or `--compile-bash-script-file` option, ignore this option
     #[arg(short, long)]
     make_target: Option<String>,
 
@@ -103,9 +112,17 @@ struct Cli {
     no_cache: bool,
 
     /// do not use rsync, which means you will not be able to use incremental replication,
-    /// which may require you to use -- no cache every time you modify the project
+    /// which may require you to use `--no-cache` every time you modify the project
     #[arg(long)]
     without_rsync: bool,
+
+    /// Mark that you are actually working on a makefile project
+    ///
+    /// pass `data` to `CPPFLAGS` environment variable in the compile bash script
+    ///
+    /// e.g. when data is `{"N": 10}`, `CPPFLAGS=-DN=10`
+    #[arg(long)]
+    makefile: bool,
 
     /// panic on compile error
     #[arg(long)]
@@ -159,7 +176,9 @@ fn main() {
     }
     let datas = data.as_array().unwrap().to_owned();
 
-    let init_bash_script = if let Some(init_bash_script_file) = args.init_bash_script_file {
+    let init_bash_script = if let Some(init_bash_script) = args.init_bash_script {
+        Some(init_bash_script)
+    } else if let Some(init_bash_script_file) = args.init_bash_script_file {
         Some(std::fs::read_to_string(init_bash_script_file).unwrap())
     } else if let Some(init_cmake_args) = args.init_cmake_args {
         Some(format!(
@@ -167,19 +186,24 @@ fn main() {
             init_cmake_args
         ))
     } else {
-        None
+        if !args.makefile {
+            None
+        } else {
+            Some("".to_string()) // do nothing when using makefile by default
+        }
     };
 
     let mut parabuilder = Parabuilder::new(
         args.project_path,
         args.workspaces_path,
-        args.template_file,
+        args.template_file.unwrap_or_else(|| PathBuf::from("")),
         &args.target_files,
     )
     .in_place_template(!args.seperate_template)
     .disable_progress_bar(args.silent)
     .no_cache(args.no_cache)
     .without_rsync(args.without_rsync)
+    .enable_cppflags(args.makefile)
     .compilation_error_handling_method(if args.panic_on_compile_error {
         CompliationErrorHandlingMethod::Panic
     } else {
@@ -190,13 +214,22 @@ fn main() {
         parabuilder = parabuilder.init_bash_script(&init_bash_script);
     }
 
-    let compile_bash_script = if let Some(compile_bash_script_file) = args.compile_bash_script_file
-    {
+    let compile_bash_script = if let Some(compile_bash_script) = args.compile_bash_script {
+        Some(compile_bash_script)
+    } else if let Some(compile_bash_script_file) = args.compile_bash_script_file {
         Some(std::fs::read_to_string(compile_bash_script_file).unwrap())
     } else if let Some(target) = args.make_target {
-        Some(format!(r#"cmake --build build --target {} -- -B"#, target))
+        if !args.makefile {
+            Some(format!(r#"cmake --build build --target {} -- -B"#, target))
+        } else {
+            Some(format!(r#"make {} -B"#, target))
+        }
     } else {
-        None
+        if !args.makefile {
+            None
+        } else {
+            Some("make -B".to_string())
+        }
     };
 
     if let Some(compile_bash_script) = compile_bash_script {
@@ -225,9 +258,10 @@ fn main() {
         parabuilder = parabuilder.run_workers(run_workers);
     }
 
+    let datas_len = datas.len();
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    let (run_data, _compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
+    let (run_data, compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
 
     if let Some(output_file) = args.output_file {
         std::fs::write(
@@ -237,5 +271,31 @@ fn main() {
         .unwrap();
     } else {
         println!("{}", serde_json::to_string_pretty(&run_data).unwrap());
+    }
+
+    println!("Compilation Summary");
+    println!("===================");
+    println!(
+        "Success: {}\tFailed: {}",
+        datas_len - compile_error_datas.len(),
+        compile_error_datas.len()
+    );
+    println!();
+    println!("Execution Summary");
+    println!("===================");
+    if run_data.is_array()
+        && run_data.as_array().unwrap()[0].is_object()
+        && !run_data.as_array().unwrap()[0]["status"].is_null()
+    {
+        let success = run_data
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|data| data["status"].as_i64().unwrap() == 0)
+            .count();
+        let failed = run_data.as_array().unwrap().len() - success;
+        println!("Success: {}\tFailed: {}", success, failed);
+    } else {
+        println!("Unknown run_data format, please check the output")
     }
 }

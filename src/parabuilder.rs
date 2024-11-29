@@ -38,8 +38,8 @@ pub enum RunMethod {
     InPlace,
     /// Compile and run in different threads/workspaces, `usize` is the number of threads to run
     OutOfPlace(usize),
-    /// After compile, run in a single thread/workspace
-    Exclusive,
+    /// After compile, run in a `usize` thread/workspace
+    Exclusive(usize),
 }
 
 static CUDA_DEVICE_UUIDS: OnceLock<Vec<String>> = OnceLock::new();
@@ -76,6 +76,7 @@ pub struct Parabuilder {
     mpb: MultiProgress,
     no_cache: bool,
     without_rsync: bool,
+    enable_cppflags: bool,
 }
 
 fn run_func_data_pre_(
@@ -231,7 +232,7 @@ impl Parabuilder {
             compile_bash_script: compile_bash_script.to_string(),
             run_bash_script: default_run_bash_script,
             build_workers,
-            run_method: RunMethod::Exclusive,
+            run_method: RunMethod::Exclusive(1),
             temp_target_path_dir,
             run_func_data: IGNORE_ON_ERROR_DEFAULT_RUN_FUNC,
             data_queue_receiver: None,
@@ -242,6 +243,7 @@ impl Parabuilder {
             mpb: MultiProgress::new(),
             no_cache: false,
             without_rsync: false,
+            enable_cppflags: false,
         }
     }
 
@@ -274,14 +276,14 @@ impl Parabuilder {
             if self.build_workers == -run_workers as usize {
                 self.run_method = RunMethod::InPlace;
             } else {
-                self.run_method = RunMethod::Exclusive;
+                self.run_method = RunMethod::Exclusive(-run_workers as usize);
             }
         }
         self
     }
 
-    pub fn run_workers_exclusive(mut self) -> Self {
-        self.run_method = RunMethod::Exclusive;
+    pub fn run_workers_exclusive(mut self, run_workers: isize) -> Self {
+        self.run_method = RunMethod::Exclusive(run_workers as usize);
         self
     }
 
@@ -336,6 +338,11 @@ impl Parabuilder {
         self
     }
 
+    pub fn enable_cppflags(mut self, enable_cppflags: bool) -> Self {
+        self.enable_cppflags = enable_cppflags;
+        self
+    }
+
     /// Set datas to be rendered into the template
     pub fn set_datas(&mut self, datas: Vec<JsonValue>) -> Result<(), Box<dyn Error>> {
         if self.data_queue_receiver.is_some() {
@@ -360,9 +367,14 @@ impl Parabuilder {
 
     /// Initialize workspaces
     pub fn init_workspace(&self) -> Result<(), Box<dyn Error>> {
+        if !is_command_installed("rsync") {
+            if !self.without_rsync {
+                return Err("rsync is not installed, set `without_rsync` to true to ignore".into());
+            }
+        }
         let out_of_place_run_workers = match self.run_method {
             RunMethod::OutOfPlace(run_workers) => run_workers,
-            RunMethod::Exclusive => 1,
+            RunMethod::Exclusive(run_workers) => run_workers,
             _ => 0,
         };
         let workspaces_path = if self.workspaces_path.is_absolute() {
@@ -503,18 +515,13 @@ impl Parabuilder {
         if !is_command_installed("lsof") {
             return Err("lsof is not installed, which may lead to strange problems that are difficult to reproduce".into());
         }
-        if !is_command_installed("rsync") {
-            if !self.without_rsync {
-                return Err("rsync is not installed, set `without_rsync` to true to ignore".into());
-            }
-        }
         let mut build_handles = vec![];
         let mut run_handles = Vec::new();
         let (executable_queue_sender, executable_queue_receiver) = unbounded();
         let data_size = self.data_queue_receiver.as_ref().unwrap().len() as u64;
         let build_pb = self.add_progress_bar("Building", data_size, "All builds done");
         let run_pb = if !matches!(self.run_method, RunMethod::No) {
-            if matches!(self.run_method, RunMethod::Exclusive) {
+            if matches!(self.run_method, RunMethod::Exclusive(_)) {
                 self.add_progress_bar("Waiting to run (exclusive)", data_size, "All runs done")
             } else {
                 self.add_progress_bar("Running", data_size, "All runs done")
@@ -538,18 +545,13 @@ impl Parabuilder {
             drop(executable_queue_sender);
         };
         let spawn_run_workers = || {
-            if let RunMethod::OutOfPlace(run_workers) = self.run_method {
-                for i in 0..run_workers {
-                    let workspace_path = self.workspaces_path.join(format!("workspace_exe_{}", i));
-                    let run_handle = self.run_worker(
-                        workspace_path,
-                        executable_queue_receiver.clone(),
-                        run_pb.clone(),
-                    );
-                    run_handles.push(run_handle);
-                }
-            } else if matches!(self.run_method, RunMethod::Exclusive) {
-                let workspace_path = self.workspaces_path.join("workspace_exe_0");
+            let run_workers = match self.run_method {
+                RunMethod::OutOfPlace(run_workers) => run_workers,
+                RunMethod::Exclusive(run_workers) => run_workers,
+                _ => 0,
+            };
+            for i in 0..run_workers {
+                let workspace_path = self.workspaces_path.join(format!("workspace_exe_{}", i));
                 let run_handle = self.run_worker(
                     workspace_path,
                     executable_queue_receiver.clone(),
@@ -561,7 +563,7 @@ impl Parabuilder {
         };
         spawn_build_workers();
         drop(build_pb);
-        if matches!(self.run_method, RunMethod::Exclusive) {
+        if matches!(self.run_method, RunMethod::Exclusive(_)) {
             let compile_error_datas =
                 build_handles
                     .into_iter()
@@ -628,26 +630,42 @@ impl Parabuilder {
 
         let template_output_path = workspace_path.join(&template_output_file);
         let mut handlebars = Handlebars::new();
-        handlebars.register_helper("default", Box::new(default_value_helper));
-        handlebars
-            .register_template_string("tpl", std::fs::read_to_string(&template_path).unwrap())
-            .unwrap();
+        if template_path.exists() && template_path.is_file() {
+            handlebars.register_helper("default", Box::new(default_value_helper));
+            handlebars
+                .register_template_string("tpl", std::fs::read_to_string(&template_path).unwrap())
+                .unwrap();
+        }
         let mut run_data = JsonValue::Null;
         let mut compile_error_datas = Vec::new();
         let run_bash_script = self.run_bash_script.clone();
+        let enable_cppflags = self.enable_cppflags;
         std::thread::spawn(move || {
             for (i, data) in data_queue_receiver.iter() {
-                let mut template_output = std::fs::File::create(&template_output_path)
-                    .expect(format!("Failed to create {:?}", template_output_path).as_str());
-                handlebars
-                    .render_to_write("tpl", &data, &template_output)
-                    .expect(format!("Failed to render {:?}", template_output_path).as_str());
-                template_output.flush().unwrap();
-                let output = Command::new("bash")
+                let mut cppflags_val = "-DPARABUILD=ON ".to_string();
+                if enable_cppflags {
+                    /* {"key":value} => -Dkey=value*/
+                    for (key, value) in data.as_object().unwrap().iter() {
+                        cppflags_val.push_str(&format!("-D{}={} ", key, value));
+                    }
+                }
+                if handlebars.has_template("tpl") {
+                    let mut template_output = std::fs::File::create(&template_output_path)
+                        .expect(format!("Failed to create {:?}", template_output_path).as_str());
+                    handlebars
+                        .render_to_write("tpl", &data, &template_output)
+                        .expect(format!("Failed to render {:?}", template_output_path).as_str());
+                    template_output.flush().unwrap();
+                }
+                let mut output = Command::new("bash");
+                let mut output = output
                     .arg("-c")
                     .arg(&compile_bash_script)
-                    .current_dir(&workspace_path)
-                    .output();
+                    .current_dir(&workspace_path);
+                if enable_cppflags {
+                    output = output.env("CPPFLAGS", cppflags_val);
+                }
+                let output = output.output();
                 build_pb.inc(1);
                 if output.is_err() || output.is_ok() && !output.as_ref().unwrap().status.success() {
                     if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
@@ -699,7 +717,7 @@ impl Parabuilder {
                         .unwrap();
                         run_pb.inc(1);
                     } else if matches!(run_method, RunMethod::OutOfPlace(_))
-                        || matches!(run_method, RunMethod::Exclusive)
+                        || matches!(run_method, RunMethod::Exclusive(_))
                     {
                         for (target_path, target_file_base) in
                             targets_path.iter().zip(target_files_base.iter())
@@ -905,7 +923,13 @@ mod tests {
         build_workers: usize,
         run_method: RunMethod,
         in_place_template: bool,
+        is_makefile_project: bool,
     ) {
+        let project = if !is_makefile_project {
+            EXAMPLE_PROJECT
+        } else {
+            crate::test_constants::EXAMPLE_MAKEFILE_PROJECT_PATH
+        };
         let mut datas = (1..=size)
             .map(|i| json!({"N": i}))
             .collect::<Vec<JsonValue>>();
@@ -916,28 +940,46 @@ mod tests {
         datas.push(error_data.clone());
         let workspaces_path = PathBuf::from(format!("tests/workspaces_{}", name));
         let mut parabuilder = Parabuilder::new(
-            EXAMPLE_PROJECT,
+            project,
             &workspaces_path,
-            if in_place_template {
-                EXAMPLE_IN_PLACE_TEMPLATE_FILE
+            if !is_makefile_project {
+                if in_place_template {
+                    EXAMPLE_IN_PLACE_TEMPLATE_FILE
+                } else {
+                    EXAMPLE_TEMPLATE_FILE
+                }
             } else {
-                EXAMPLE_TEMPLATE_FILE
+                ""
             },
-            &[EXAMPLE_TARGET_EXECUTABLE_FILE],
+            if !is_makefile_project {
+                &[EXAMPLE_TARGET_EXECUTABLE_FILE]
+            } else {
+                &["main"]
+            },
         )
-        .init_bash_script(if in_place_template {
-            EXAMPLE_IN_PLACE_INIT_BASH_SCRIPT
+        .init_bash_script(if !is_makefile_project {
+            if in_place_template {
+                EXAMPLE_IN_PLACE_INIT_BASH_SCRIPT
+            } else {
+                EXAMPLE_INIT_BASH_SCRIPT
+            }
         } else {
-            EXAMPLE_INIT_BASH_SCRIPT
+            ""
         })
-        .compile_bash_script(EXAMPLE_COMPILE_BASH_SCRIPT)
+        .compile_bash_script(if !is_makefile_project {
+            EXAMPLE_COMPILE_BASH_SCRIPT
+        } else {
+            "make -B"
+        })
         .build_workers(build_workers)
         .run_method(run_method)
         .run_func(PANIC_ON_ERROR_DEFAULT_RUN_FUNC)
         .disable_progress_bar(true)
         .compilation_error_handling_method(CompliationErrorHandlingMethod::Collect)
         .in_place_template(in_place_template)
-        .auto_gather_array_data(true);
+        .auto_gather_array_data(true)
+        .enable_cppflags(is_makefile_project);
+
         parabuilder.set_datas(datas).unwrap();
         parabuilder.init_workspace().unwrap();
         let (run_data, compile_error_datas) = parabuilder.run().unwrap();
@@ -995,6 +1037,7 @@ mod tests {
             1,
             RunMethod::No,
             false,
+            false,
         );
     }
 
@@ -1005,6 +1048,7 @@ mod tests {
             SINGLETHREADED_N,
             1,
             RunMethod::InPlace,
+            false,
             false,
         );
     }
@@ -1017,6 +1061,7 @@ mod tests {
             4,
             RunMethod::No,
             false,
+            false,
         );
     }
 
@@ -1027,6 +1072,7 @@ mod tests {
             MULTITHREADED_N,
             4,
             RunMethod::InPlace,
+            false,
             false,
         );
     }
@@ -1039,6 +1085,7 @@ mod tests {
             4,
             RunMethod::OutOfPlace(1),
             false,
+            false,
         );
     }
 
@@ -1050,6 +1097,7 @@ mod tests {
             4,
             RunMethod::OutOfPlace(2),
             false,
+            false,
         );
     }
 
@@ -1059,7 +1107,8 @@ mod tests {
             "test_multithreaded_parabuild_exclusive_run",
             MULTITHREADED_N,
             4,
-            RunMethod::Exclusive,
+            RunMethod::Exclusive(2),
+            false,
             false,
         );
     }
@@ -1072,16 +1121,30 @@ mod tests {
             4,
             RunMethod::OutOfPlace(2),
             true,
+            false,
         );
     }
 
     #[test]
     fn test_multithreaded_parabuild_out_of_place_run_default_template() {
         parabuild_tester(
-            "est_multithreaded_parabuild_out_of_place_run_default_template",
+            "test_multithreaded_parabuild_out_of_place_run_default_template",
             0,
             4,
             RunMethod::OutOfPlace(2),
+            true,
+            false,
+        );
+    }
+
+    #[test]
+    fn test_multithreaded_parabuild_makefile_project() {
+        parabuild_tester(
+            "test_multithreaded_parabuild_makefile_project",
+            10,
+            4,
+            RunMethod::OutOfPlace(2),
+            true,
             true,
         );
     }
