@@ -39,6 +39,8 @@ struct Cli {
     output_file: Option<PathBuf>,
 
     /// init bash script
+    ///
+    /// Default to `cmake -S . -B build -DPARABUILD=ON`
     #[arg(long)]
     init_bash_script: Option<String>,
 
@@ -53,6 +55,8 @@ struct Cli {
     init_cmake_args: Option<String>,
 
     /// compile bash script
+    ///
+    /// Default to `cmake --build build --target all -- -B`
     #[arg(long)]
     compile_bash_script: Option<String>,
 
@@ -65,6 +69,8 @@ struct Cli {
     make_target: Option<String>,
 
     /// run bash script
+    ///
+    /// If not provided, we will run the first target file in the `target_files` directly
     #[arg(long)]
     run_bash_script: Option<String>,
 
@@ -83,12 +89,18 @@ struct Cli {
 
     /// run workers
     ///
-    /// We have three execution modes:
+    /// We have four execution modes:
+    ///
     /// 1. separate and parallel
-    /// 2. separate and serial
+    ///
+    /// 2. separate and serial (by default)
+    ///
     /// 3. execute immediately in place
     ///
-    /// The default behavior is the first one, which means we will move TARGET_FILES between build/run workspaces.
+    /// 4. do not execute, only compile, move all the TARGET_FILES to `workspaces/targets`
+    ///
+    /// The first one means we will move TARGET_FILES between build/run workspaces.
+    /// Compile and run in parallel in different places like a pipeline.
     ///
     /// The second behavior is similar to the first,
     /// but the difference is that we only start running after all the compilation work is completed.
@@ -97,11 +109,20 @@ struct Cli {
     /// immediately executes the compilation of a workspace in its original location.
     ///
     /// To specify these three working modes through the command line:
+    ///
     /// 1. positive numbers represent the first
+    ///
     /// 2. negative numbers represent the second
-    /// 3. `-build_workers` represent the third, e.g. `-j 4 -J -4`
+    ///
+    /// 3. pass `--run-in-place` to represent the third, we will ignore the value of this option
+    ///
+    /// 4. 0 represent the fourth
     #[arg(short = 'J', long)]
     run_workers: Option<isize>,
+
+    /// run in place, which means we will not move the TARGET_FILES between build/run workspaces
+    #[arg(long)]
+    run_in_place: bool,
 
     /// seperate template file, as opposed to using the same file to render in place
     #[arg(long)]
@@ -128,6 +149,7 @@ struct Cli {
     #[arg(long)]
     panic_on_compile_error: bool,
 
+    /// format the output when printing to stdout (only valid when `--output-file` is not provided)
     #[arg(long)]
     format_output: bool,
 }
@@ -258,7 +280,7 @@ fn main() {
     }
 
     if let Some(run_workers) = args.run_workers {
-        parabuilder = parabuilder.run_workers(run_workers);
+        parabuilder = parabuilder.run_workers(run_workers, args.run_in_place);
     }
 
     let datas_len = datas.len();

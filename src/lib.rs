@@ -126,9 +126,8 @@
 //! ```shell
 //! parabuild \
 //!     tests/example_cmake_project \
-//!     src/main.cpp \
 //!     build/main \
-//!     --in-place-template \
+//!     -t src/main.cpp \
 //!     --data '[{"N": 10}, {"N": 20}]'
 //! ```
 //!

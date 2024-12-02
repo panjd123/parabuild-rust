@@ -267,15 +267,15 @@ impl Parabuilder {
         self
     }
 
-    pub fn run_workers(mut self, run_workers: isize) -> Self {
-        if run_workers > 0 {
-            self.run_method = RunMethod::OutOfPlace(run_workers as usize);
-        } else if run_workers == 0 {
-            self.run_method = RunMethod::No;
-        } else if run_workers < 0 {
-            if self.build_workers == -run_workers as usize {
-                self.run_method = RunMethod::InPlace;
-            } else {
+    pub fn run_workers(mut self, run_workers: isize, run_in_place: bool) -> Self {
+        if run_in_place {
+            self.run_method = RunMethod::InPlace;
+        } else {
+            if run_workers > 0 {
+                self.run_method = RunMethod::OutOfPlace(run_workers as usize);
+            } else if run_workers == 0 {
+                self.run_method = RunMethod::No;
+            } else if run_workers < 0 {
                 self.run_method = RunMethod::Exclusive(-run_workers as usize);
             }
         }

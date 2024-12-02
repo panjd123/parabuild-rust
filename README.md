@@ -8,11 +8,23 @@
 
 Parabuild is a Rust tool that helps you compile complex (single file) projects in parallel, such as some C++/CUDA projects that heavily use templates (when you cannot achieve the best performance through `make -j`).
 
-## Quick Start
+## Command Line Quick Start
 
-The following is an example of how to use parabuild-rust to compile a C++ project.
+The following is an example of how to use parabuild-rust cli to compile a C++ project.
 
-We suggest that you install `lsof` and `rsync`.
+If you are new to rust-lang, you can install it by running the following command:
+
+```shell
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then you can install parabuild-rust by running the following command:
+
+```shell
+cargo install parabuild
+```
+
+Install `lsof` and `rsync`, which are required by parabuild-rust:
 
 ```
 sudo apt update
@@ -22,6 +34,8 @@ sudo apt install -y lsof rsync
 We use [handlebars templating language](https://handlebarsjs.com/) to generate source file, here is an example:
 
 ```cpp
+// src/main.cpp
+
 #include <iostream>
 
 template <int n>
@@ -35,78 +49,45 @@ int main(){
 }
 ```
 
-Main body:
+We will use this file to organize a C++ project like this:
 
-```rust
-use parabuild::Parabuilder;
-use serde_json::{json, to_string_pretty, Value as JsonValue};
-
-fn main() {
-    let project_path = "tests/example_cmake_project"; // your project path
-    let workspaces_path = "workspaces"; // where to store the workspaces, executables, etc.
-    let template_path = "src/main.cpp.template"; // template file in the project
-    let target_executable_file = "build/main"; // target executable file
-    let datas = vec![json!({"N": "10"}), json!({"N": "20"})];
-    let mut parabuilder = Parabuilder::new(
-        project_path,
-        workspaces_path,
-        template_path,
-        &[target_executable_file],
-    );
-    parabuilder.set_datas(datas).unwrap();
-    parabuilder.init_workspace().unwrap();
-    let (run_data, _compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
-    println!("{}", to_string_pretty(&run_data).unwrap());
-    /*
-    [
-        {
-            "data": {
-                "N": "10"
-            },
-            "status": 0,
-            "stderr": "",
-            "stdout": "10\n"
-        },
-        {
-            "data": {
-                "N": "20"
-            },
-            "status": 0,
-            "stderr": "",
-            "stdout": "20\n"
-        }
-    ]
-     */
-}
+```shell
+example_project
+├── CMakeLists.txt
+├── src
+│   └── main.cpp
 ```
 
-We return `compute_error_datas` to indicate the data with compilation errors. Compilation errors are common in debugging projects that heavily use templates.
-
-### Advanced Usage
-
-For more advanced usage, please refer to the [documentation](https://docs.rs/parabuild) and [complete example](examples/complete_usage.rs).
-
-## Command Line
-
-We also provide a command line tool to compile the project. You can use `cargo install parabuild` to install it.
-
-### Simple Example
+Suppose we want to compile the project with different `N` values, we can use the following command, where you can use `xxx-bash-script` to specify what needs to be executed during workspace initialization, compilation, and runtime:
 
 ```shell
 parabuild \
+    example_project \
+    build/main \
+    --init-bash-script "cmake -S . -B build" \
+    --compile-bash-script "cmake --build build -B" \
+    --run-bash-script "./build/main" \
+    --template-file src/main.cpp \
+    --data '[{"N": 10}, {"N": 20}]' \
+    -j 1
+```
+
+Give it a quick try from scratch by running the following commands:
+
+```shell
+git clone https://github.com/panjd123/parabuild-rust.git
+cd parabuild-rust
+
+cargo run -- \
     tests/example_cmake_project \
     build/main \
-    -t src/main.cpp \
+    --template-file src/main.cpp \
     --data '[{"N": 10}, {"N": 20}]'
-
-parabuild \
-    tests/example_makefile_project \
-    main \
-    --data '[{"N": 10}, {"N": 20}]' \
-    --makefile
 ```
 
 ### Help
+
+We have many customization options, please check `parabuild --help`
 
 ```shell
 $ parabuild --help
@@ -143,6 +124,8 @@ Options:
 
       --init-bash-script <INIT_BASH_SCRIPT>
           init bash script
+          
+          Default to `cmake -S . -B build -DPARABUILD=ON`
 
       --init-bash-script-file <INIT_BASH_SCRIPT_FILE>
           init bash script file, when used together with the `--init-bash-script` option, ignore this option
@@ -154,6 +137,8 @@ Options:
 
       --compile-bash-script <COMPILE_BASH_SCRIPT>
           compile bash script
+          
+          Default to `cmake --build build --target all -- -B`
 
       --compile-bash-script-file <COMPILE_BASH_SCRIPT_FILE>
           compile bash script file, when used together with the `--compile-bash-script` option, ignore this option
@@ -163,6 +148,8 @@ Options:
 
       --run-bash-script <RUN_BASH_SCRIPT>
           run bash script
+          
+          If not provided, we will run the first target file in the `target_files` directly
 
       --run-bash-script-file <RUN_BASH_SCRIPT_FILE>
           run bash script file when used together with the `--run-bash-script` option, ignore this option
@@ -176,15 +163,34 @@ Options:
   -J, --run-workers <RUN_WORKERS>
           run workers
           
-          We have three execution modes: 1. separate and parallel 2. separate and serial 3. execute immediately in place
+          We have four execution modes:
           
-          The default behavior is the first one, which means we will move TARGET_FILES between build/run workspaces.
+          1. separate and parallel
+          
+          2. separate and serial (by default)
+          
+          3. execute immediately in place
+          
+          4. do not execute, only compile, move all the TARGET_FILES to `workspaces/targets`
+          
+          The first one means we will move TARGET_FILES between build/run workspaces. Compile and run in parallel in different places like a pipeline.
           
           The second behavior is similar to the first, but the difference is that we only start running after all the compilation work is completed.
           
           The third method is quite unique, as it does not move the TARGET_FILES and immediately executes the compilation of a workspace in its original location.
           
-          To specify these three working modes through the command line: 1. positive numbers represent the first 2. negative numbers represent the second 3. `-build_workers` represent the third, e.g. `-j 4 -J -4`
+          To specify these three working modes through the command line:
+          
+          1. positive numbers represent the first
+          
+          2. negative numbers represent the second
+          
+          3. pass `--run-in-place` to represent the third, we will ignore the value of this option
+          
+          4. 0 represent the fourth
+
+      --run-in-place
+          run in place, which means we will not move the TARGET_FILES between build/run workspaces
 
       --seperate-template
           seperate template file, as opposed to using the same file to render in place
@@ -206,7 +212,7 @@ Options:
           panic on compile error
 
       --format-output
-          
+          format the output when printing to stdout (only valid when `--output-file` is not provided)
 
   -h, --help
           Print help (see a summary with '-h')
@@ -214,6 +220,10 @@ Options:
   -V, --version
           Print version
 ```
+
+### Advanced Usage
+
+For more advanced usage, please refer to the [documentation](https://docs.rs/parabuild) and [complete example](examples/complete_usage.rs).
 
 ## License
 
