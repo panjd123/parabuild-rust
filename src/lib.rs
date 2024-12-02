@@ -154,6 +154,54 @@
 //! ]
 //! ```
 //!
+//! ## Makefile-project
+//!
+//! For this type of project, we provide a way to replace data by modifying macro definitions through `CPPFLAGS`
+//!
+//! `main.cpp`:
+//!
+//! ```cpp
+//! #include <iostream>
+//! #ifndef N
+//! #define N 42
+//! #endif
+//!
+//! template <int n>
+//! void print()
+//! {
+//!    std::cout << n << std::endl;
+//! }
+//!
+//! int main()
+//! {
+//!    print<N>();
+//!    return 0;
+//! }
+//! ```
+//!
+//! `Makefile`:
+//!
+//! ```Makefile
+//! CXX=g++
+//!
+//! CXXFLAGS=-std=c++11
+//!
+//! main: src/main.cpp
+//! 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $@ $^
+//! ```
+//!
+//! run script:
+//!
+//! ```shell
+//! parabuild \
+//!    tests/example_makefile_project \
+//!    main \
+//!    --data '[{"N": 10}, {"N": 20}]' \
+//!    --makefile
+//! ```
+//!
+//! Or specify `.enable_cppflags(true)` when using the rust library.
+//!
 //! # Features
 //!
 //! - Use handlebars template language to generate source file.
