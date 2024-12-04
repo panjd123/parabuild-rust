@@ -1,5 +1,5 @@
 use clap::Parser;
-use parabuild::{CompliationErrorHandlingMethod, Parabuilder};
+use parabuild::{CompliationErrorHandlingMethod, Parabuilder, RunMethod};
 use serde_json::Value as JsonValue;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -280,7 +280,13 @@ fn main() {
     }
 
     if let Some(run_workers) = args.run_workers {
-        parabuilder = parabuilder.run_workers(run_workers, args.run_in_place);
+        if !args.run_in_place {
+            parabuilder = parabuilder.run_workers(run_workers);
+        }
+    }
+
+    if args.run_in_place {
+        parabuilder = parabuilder.run_method(RunMethod::InPlace);
     }
 
     let datas_len = datas.len();
