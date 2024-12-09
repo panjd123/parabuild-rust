@@ -1,3 +1,9 @@
+# 0.2.5 - 0.2.8
+
+- Support Makefile project by passing `CPPFLAGS`, check documentation for more details
+- Support more cli options like `--panic-on-compile-error` and `format-output`
+- Refactoring cli parameter logic for `--run-in-place`
+
 # 0.2.4
 
 - Use rsync by default
