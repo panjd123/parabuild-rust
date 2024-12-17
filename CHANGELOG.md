@@ -1,3 +1,10 @@
+# 0.2.9
+
+- Fix summary output when all data compiled failed
+- Optimize error prompts
+- Add spinner when running in-place
+- Run `cargo update`
+
 # 0.2.5 - 0.2.8
 
 - Support Makefile project by passing `CPPFLAGS`, check documentation for more details
