@@ -188,18 +188,21 @@ fn _command_platform_specific_behavior_check() {
 fn main() {
     let args = Cli::parse();
     let data = if let Some(data_str) = args.data {
+        if data_str.is_empty() {
+            panic!("data must not be empty");
+        }
         JsonValue::from_str(&data_str).unwrap()
     } else if let Some(data_path) = args.data_file {
+        if !data_path.exists() {
+            panic!("data file not exists");
+        }
         let data_str = std::fs::read_to_string(data_path).unwrap();
         JsonValue::from_str(&data_str).unwrap()
     } else {
         panic!("either `--data` or `--data-file` must be provided");
     };
 
-    if !data.is_array() {
-        panic!("data must be an array");
-    }
-    let datas = data.as_array().unwrap().to_owned();
+    let datas = data.as_array().expect("data must be an array").to_owned();
 
     let init_bash_script = if let Some(init_bash_script) = args.init_bash_script {
         Some(init_bash_script)
@@ -332,6 +335,7 @@ fn main() {
     println!("Execution Summary");
     println!("===================");
     if run_data.is_array()
+        && run_data.as_array().unwrap().len() > 0
         && run_data.as_array().unwrap()[0].is_object()
         && !run_data.as_array().unwrap()[0]["status"].is_null()
     {

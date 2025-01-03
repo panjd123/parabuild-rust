@@ -3,3 +3,5 @@ cargo run -- \
     main \
     --data '[{"N": 10}, {"N": 20}]' \
     --makefile
+
+# no need to specify the template file

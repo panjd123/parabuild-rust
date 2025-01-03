@@ -636,7 +636,14 @@ impl Parabuilder {
         let mut compile_error_datas = Vec::new();
         let run_bash_script = self.run_bash_script.clone();
         let enable_cppflags = self.enable_cppflags;
+        let disable_progress_bar = self.disable_progress_bar;
+        let mpb = self.mpb.clone();
         std::thread::spawn(move || {
+            let sp = Self::add_spinner2(
+                disable_progress_bar && matches!(run_method, RunMethod::InPlace),
+                &mpb,
+                serde_json::to_string_pretty(&JsonValue::Null).unwrap(),
+            );
             for (i, data) in data_queue_receiver.iter() {
                 let mut cppflags_val = "-DPARABUILD=ON ".to_string();
                 if enable_cppflags {
@@ -691,30 +698,19 @@ impl Parabuilder {
                         }
                     }
                 }
-                if matches!(run_method, RunMethod::No) {
-                    for (target_path, target_file_base) in
-                        targets_path.iter().zip(target_files_base.iter())
-                    {
-                        let to_target_executable_path_file = format!("{}_{}", &target_file_base, i);
-                        let to_target_executable_path =
-                            temp_target_path_dir.join(&to_target_executable_path_file);
-                        std::fs::copy(&target_path, &to_target_executable_path).unwrap();
-                    }
-                    let to_metadata_path = temp_target_path_dir.join(format!("data_{}.json", i));
-                    std::fs::write(&to_metadata_path, data.to_string()).unwrap();
-                } else {
-                    if matches!(run_method, RunMethod::InPlace) {
-                        run_func(
+                match run_method {
+                    RunMethod::InPlace => {
+                        let last_data = run_func(
                             &std::fs::canonicalize(&workspace_path).unwrap(),
                             &run_bash_script,
                             &data,
                             &mut run_data,
                         )
                         .unwrap();
+                        sp.set_message(serde_json::to_string_pretty(&last_data).unwrap());
                         run_pb.inc(1);
-                    } else if matches!(run_method, RunMethod::OutOfPlace(_))
-                        || matches!(run_method, RunMethod::Exclusive(_))
-                    {
+                    }
+                    RunMethod::No | RunMethod::Exclusive(_) | RunMethod::OutOfPlace(_) => {
                         for (target_path, target_file_base) in
                             targets_path.iter().zip(target_files_base.iter())
                         {
@@ -724,9 +720,17 @@ impl Parabuilder {
                                 temp_target_path_dir.join(&to_target_executable_path_file);
                             std::fs::copy(&target_path, &to_target_executable_path).unwrap();
                         }
-                        executable_queue_sender.send((i, data)).unwrap();
-                    } else {
-                        panic!("Run method not implemented");
+                        match run_method {
+                            RunMethod::No => {
+                                let to_metadata_path =
+                                    temp_target_path_dir.join(format!("data_{}.json", i));
+                                std::fs::write(&to_metadata_path, data.to_string()).unwrap();
+                            }
+                            RunMethod::OutOfPlace(_) | RunMethod::Exclusive(_) => {
+                                executable_queue_sender.send((i, data)).unwrap();
+                            }
+                            _ => panic!("Unexpected run method"),
+                        }
                     }
                 }
             }
@@ -753,11 +757,10 @@ impl Parabuilder {
         let run_bash_script = self.run_bash_script.clone();
         let temp_target_path_dir = self.temp_target_path_dir.clone();
         std::thread::spawn(move || {
-            let mut last_data = JsonValue::Null;
             let sp = Self::add_spinner2(
                 disable_progress_bar,
                 &mpb,
-                serde_json::to_string_pretty(&last_data).unwrap(),
+                serde_json::to_string_pretty(&JsonValue::Null).unwrap(),
             );
             for (i, data) in executable_queue_receiver.iter() {
                 for (target_path, target_file_base) in
@@ -770,7 +773,7 @@ impl Parabuilder {
                 for target_path in targets_path.iter() {
                     wait_until_file_ready(&target_path).unwrap();
                 }
-                last_data = run_func(
+                let last_data = run_func(
                     &std::fs::canonicalize(&workspace_path).unwrap(),
                     &run_bash_script,
                     &data,

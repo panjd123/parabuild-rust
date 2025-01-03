@@ -1,5 +1,6 @@
 /target
 
+# test temporary files
 /workspaces*
 /tests/workspaces*
 
