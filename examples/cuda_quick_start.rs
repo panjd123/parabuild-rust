@@ -6,7 +6,7 @@ fn main() {
     let workspaces_path = "workspaces"; // where to store the workspaces, executables, etc.
     let template_path = "src/main.cu"; // template file in the project
     let target_executable_file = "build/main"; // target executable file
-    let datas = (0..5)
+    let datas = (0..20)
         .into_iter()
         .map(|_| JsonValue::Null)
         .collect::<Vec<JsonValue>>();
@@ -18,7 +18,7 @@ fn main() {
     )
     .in_place_template(true)
     .build_workers(2)
-    .run_method(RunMethod::OutOfPlace(7));
+    .run_method(RunMethod::OutOfPlace(2));
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
     parabuilder.run().unwrap();

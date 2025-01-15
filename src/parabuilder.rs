@@ -640,7 +640,7 @@ impl Parabuilder {
         let mpb = self.mpb.clone();
         std::thread::spawn(move || {
             let sp = Self::add_spinner2(
-                disable_progress_bar && matches!(run_method, RunMethod::InPlace),
+                disable_progress_bar || !matches!(run_method, RunMethod::InPlace),
                 &mpb,
                 serde_json::to_string_pretty(&JsonValue::Null).unwrap(),
             );
