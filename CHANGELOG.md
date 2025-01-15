@@ -1,3 +1,9 @@
+# 0.2.10
+
+- Fix spinner showed when not run in-place
+- Imporve example/cuda_quick_start.rs
+- `cargo update`
+
 # 0.2.9
 
 - Fix summary output when all data compiled failed
