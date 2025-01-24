@@ -152,6 +152,9 @@ struct Cli {
     /// format the output when printing to stdout (only valid when `--output-file` is not provided)
     #[arg(long)]
     format_output: bool,
+
+    #[arg(long)]
+    no_init: bool,
 }
 
 fn _command_platform_specific_behavior_check() {
@@ -204,20 +207,24 @@ fn main() {
 
     let datas = data.as_array().expect("data must be an array").to_owned();
 
-    let init_bash_script = if let Some(init_bash_script) = args.init_bash_script {
-        Some(init_bash_script)
-    } else if let Some(init_bash_script_file) = args.init_bash_script_file {
-        Some(std::fs::read_to_string(init_bash_script_file).unwrap())
-    } else if let Some(init_cmake_args) = args.init_cmake_args {
-        Some(format!(
-            r#"cmake -S . -B build {} -DPARABUILD=ON"#,
-            init_cmake_args
-        ))
+    let init_bash_script = if args.no_init {
+        Some("".to_string())
     } else {
-        if !args.makefile {
-            None
+        if let Some(init_bash_script) = args.init_bash_script {
+            Some(init_bash_script)
+        } else if let Some(init_bash_script_file) = args.init_bash_script_file {
+            Some(std::fs::read_to_string(init_bash_script_file).unwrap())
+        } else if let Some(init_cmake_args) = args.init_cmake_args {
+            Some(format!(
+                r#"cmake -S . -B build {} -DPARABUILD=ON"#,
+                init_cmake_args
+            ))
         } else {
-            Some("".to_string()) // do nothing when using makefile by default
+            if !args.makefile {
+                None
+            } else {
+                Some("".to_string()) // do nothing when using makefile by default
+            }
         }
     };
 
