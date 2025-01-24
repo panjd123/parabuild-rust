@@ -350,4 +350,11 @@ fn main() {
     } else {
         println!("Unknown run_data format, please check the output")
     }
+
+    // write compile error datas to current directory
+    std::fs::write(
+        "compile_error_datas.json",
+        serde_json::to_string_pretty(&compile_error_datas).unwrap(),
+    )
+    .unwrap();
 }
