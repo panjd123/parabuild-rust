@@ -820,7 +820,7 @@ impl Parabuilder {
             return ProgressBar::hidden();
         }
         let sty = ProgressStyle::with_template(
-            "[{elapsed_precise}  ETA: {eta_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+            "[{elapsed_precise}  ETA: {eta_precise}] [{per_sec}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
         )
         .unwrap();
         self.mpb.add(
