@@ -111,7 +111,7 @@ Options:
   -w, --workspaces-path <WORKSPACES_PATH>
           where to store the workspaces, executables, etc
           
-          [default: workspaces]
+          [default: .parabuild/workspaces]
 
       --data <DATA>
           json format data
@@ -213,6 +213,15 @@ Options:
 
       --format-output
           format the output when printing to stdout (only valid when `--output-file` is not provided)
+
+      --no-init
+          do not run the init bash script, same as `--init-bash-script ""`
+
+      --autosave-interval <AUTOSAVE_INTERVAL>
+          [default: 1m]
+
+      --autosave-dir <AUTOSAVE_DIR>
+          [default: .parabuild/autosave]
 
   -h, --help
           Print help (see a summary with '-h')
