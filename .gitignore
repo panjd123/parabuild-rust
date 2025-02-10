@@ -4,5 +4,6 @@
 /workspaces*
 /tests/workspaces*
 /.parabuild
+/*.json
 
 /.vscode

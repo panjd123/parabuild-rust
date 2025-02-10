@@ -15,7 +15,11 @@ fn main() {
     );
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    let (run_data, _compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
+    let (run_data, _compile_error_datas, _unprocessed_datas): (
+        JsonValue,
+        Vec<JsonValue>,
+        Vec<JsonValue>,
+    ) = parabuilder.run().unwrap();
     println!("{}", to_string_pretty(&run_data).unwrap());
     /*
     [

@@ -35,7 +35,11 @@ fn main() {
     // let sender = parabuilder.get_data_queue_sender().unwrap();
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    let (run_data, compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
+    let (run_data, compile_error_datas, _unprocessed_datas): (
+        JsonValue,
+        Vec<JsonValue>,
+        Vec<JsonValue>,
+    ) = parabuilder.run().unwrap();
     println!(
         "run_data: {}",
         serde_json::to_string_pretty(&run_data).unwrap()

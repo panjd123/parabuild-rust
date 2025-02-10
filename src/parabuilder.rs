@@ -71,8 +71,7 @@ pub struct Parabuilder {
     build_workers: usize,
     run_method: RunMethod,
     temp_target_path_dir: PathBuf,
-    run_func_data:
-        fn(&PathBuf, &str, &JsonValue, &mut JsonValue) -> Result<JsonValue, Box<dyn Error>>,
+    run_func_data: RunFunc,
     data_queue_receiver: Option<Receiver<(usize, JsonValue)>>,
     compilation_error_handling_method: CompliationErrorHandlingMethod,
     auto_gather_array_data: bool,
@@ -143,12 +142,17 @@ fn run_func_data_panic_on_error(
     run_script: &str,
     data: &JsonValue,
     run_data: &mut JsonValue,
+    stop_flag: &Arc<AtomicBool>,
 ) -> Result<JsonValue, Box<dyn Error>> {
     let (success, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data)?;
     if !success {
         Err(format!("stderr: {}", this_data["stderr"]).as_str())?;
     }
-    run_func_data_post_(this_data, run_data)
+    if stop_flag.load(Ordering::Relaxed) {
+        Ok(JsonValue::Null)
+    } else {
+        run_func_data_post_(this_data, run_data)
+    }
 }
 
 fn run_func_data_ignore_on_error(
@@ -156,26 +160,29 @@ fn run_func_data_ignore_on_error(
     run_script: &str,
     data: &JsonValue,
     run_data: &mut JsonValue,
+    stop_flag: &Arc<AtomicBool>,
 ) -> Result<JsonValue, Box<dyn Error>> {
     let (_, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data)?;
-    run_func_data_post_(this_data, run_data)
+    if stop_flag.load(Ordering::Relaxed) {
+        Ok(JsonValue::Null)
+    } else {
+        run_func_data_post_(this_data, run_data)
+    }
 }
 
-/// Default run function that panics when there is an error
-pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: fn(
+type RunFunc = fn(
     &PathBuf,
     &str,
     &JsonValue,
     &mut JsonValue,
-) -> Result<JsonValue, Box<dyn Error>> = run_func_data_panic_on_error;
+    &Arc<AtomicBool>,
+) -> Result<JsonValue, Box<dyn Error>>;
+
+/// Default run function that panics when there is an error
+pub const PANIC_ON_ERROR_DEFAULT_RUN_FUNC: RunFunc = run_func_data_panic_on_error;
 
 /// Default run function that ignores when there is an error
-pub const IGNORE_ON_ERROR_DEFAULT_RUN_FUNC: fn(
-    &PathBuf,
-    &str,
-    &JsonValue,
-    &mut JsonValue,
-) -> Result<JsonValue, Box<dyn Error>> = run_func_data_ignore_on_error;
+pub const IGNORE_ON_ERROR_DEFAULT_RUN_FUNC: RunFunc = run_func_data_ignore_on_error;
 
 impl Parabuilder {
     pub const TEMP_TARGET_PATH_DIR: &'static str = "targets";
@@ -297,15 +304,7 @@ impl Parabuilder {
         self
     }
 
-    pub fn run_func(
-        mut self,
-        run_func: fn(
-            &PathBuf,
-            &str,
-            &JsonValue,
-            &mut JsonValue,
-        ) -> Result<JsonValue, Box<dyn Error>>,
-    ) -> Self {
+    pub fn run_func(mut self, run_func: RunFunc) -> Self {
         self.run_func_data = run_func;
         self
     }
@@ -555,7 +554,7 @@ impl Parabuilder {
     }
 
     /// run the build system
-    pub fn run(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
+    pub fn run(&self) -> Result<(JsonValue, Vec<JsonValue>, Vec<JsonValue>), Box<dyn Error>> {
         let start_time = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
         println!("Start from: {}", start_time);
         if !self.data_queue_receiver.is_some() {
@@ -629,61 +628,99 @@ impl Parabuilder {
         spawn_build_workers();
         drop(build_pb);
         if matches!(self.run_method, RunMethod::Exclusive(_)) {
-            let compile_error_datas =
-                build_handles
-                    .into_iter()
-                    .fold(vec![], |mut compile_error_datas_array, handle| {
-                        let (_, compile_error_datas) = handle.join().unwrap();
-                        compile_error_datas_array.extend(compile_error_datas);
-                        compile_error_datas_array
-                    });
+            let (compile_error_datas, ctrlc_datas) = build_handles.into_iter().fold(
+                (vec![], vec![]),
+                |(mut compile_error_datas_array, mut ctrlc_datas_array), handle| {
+                    let (_, compile_error_datas, ctrlc_data) = handle.join().unwrap();
+                    compile_error_datas_array.extend(compile_error_datas);
+                    if !ctrlc_data.is_null() {
+                        ctrlc_datas_array.push(ctrlc_data);
+                    }
+                    (compile_error_datas_array, ctrlc_datas_array)
+                },
+            );
             run_pb.set_message("Running");
             spawn_run_workers(); // spawn after build workers are done
-            let run_data_array = run_handles
-                .into_iter()
-                .map(|handle| handle.join().unwrap())
-                .collect();
+            let (run_datas, run_ctrlc_datas) = run_handles.into_iter().fold(
+                (vec![], vec![]),
+                |(mut run_datas_array, mut ctrlc_datas_array), handle| {
+                    let (run_data, ctrlc_data) = handle.join().unwrap();
+                    run_datas_array.push(run_data);
+                    if !ctrlc_data.is_null() {
+                        ctrlc_datas_array.push(ctrlc_data);
+                    }
+                    (run_datas_array, ctrlc_datas_array)
+                },
+            );
+            let mut unprocessed_datas: Vec<JsonValue> = Vec::new();
             if stop_flag.load(Ordering::Relaxed) {
-                let mut unprocessed_datas: Vec<JsonValue> = Vec::new();
                 for (_, data) in self.data_queue_receiver.as_ref().unwrap().iter() {
                     unprocessed_datas.push(data.clone());
                 }
-                let unprocessed_data = json!(unprocessed_datas);
-                self.autosave_save(&unprocessed_data, start_time);
+                for data in ctrlc_datas.iter() {
+                    unprocessed_datas.push(data.clone());
+                }
+                for data in run_ctrlc_datas.iter() {
+                    unprocessed_datas.push(data.clone());
+                }
+                let unprocessed_datas_json = json!(unprocessed_datas);
+                self.autosave_save(&unprocessed_datas_json, start_time);
             }
-            self.gather_data(run_data_array, compile_error_datas)
+            self.gather_data(run_datas, compile_error_datas, unprocessed_datas)
         } else {
             if matches!(self.run_method, RunMethod::OutOfPlace(_)) {
                 spawn_run_workers(); // spawn before build workers are done
             }
-            let (mut run_data_array, compile_error_datas) = build_handles.into_iter().fold(
-                (vec![], vec![]),
-                |(mut run_data_array, mut compile_error_datas_array), handle| {
-                    let (run_data, compile_error_datas) = handle.join().unwrap();
-                    run_data_array.push(run_data);
+            let (mut run_datas, compile_error_datas, ctrlc_datas) = build_handles.into_iter().fold(
+                (vec![], vec![], vec![]),
+                |(mut run_datas_array, mut compile_error_datas_array, mut ctrlc_datas_array),
+                 handle| {
+                    let (run_data, compile_error_datas, ctrlc_data) = handle.join().unwrap();
+                    run_datas_array.push(run_data);
                     compile_error_datas_array.extend(compile_error_datas);
-                    (run_data_array, compile_error_datas_array)
+                    if !ctrlc_data.is_null() {
+                        ctrlc_datas_array.push(ctrlc_data);
+                    }
+                    (
+                        run_datas_array,
+                        compile_error_datas_array,
+                        ctrlc_datas_array,
+                    )
                 },
             );
+            let mut run_ctrlc_datas = vec![];
             if matches!(self.run_method, RunMethod::OutOfPlace(_)) {
-                run_data_array = run_handles
-                    .into_iter()
-                    .map(|handle| handle.join().unwrap())
-                    .collect();
+                (run_datas, run_ctrlc_datas) = run_handles.into_iter().fold(
+                    (vec![], vec![]),
+                    |(mut run_datas_array, mut ctrlc_datas_array), handle| {
+                        let (run_data, ctrlc_data) = handle.join().unwrap();
+                        run_datas_array.push(run_data);
+                        if !ctrlc_data.is_null() {
+                            ctrlc_datas_array.push(ctrlc_data);
+                        }
+                        (run_datas_array, ctrlc_datas_array)
+                    },
+                );
             } // else run InPlace or No, use run_data_array from build workers
+            let mut unprocessed_datas: Vec<JsonValue> = Vec::new();
             if stop_flag.load(Ordering::Relaxed) {
-                let mut unprocessed_datas: Vec<JsonValue> = Vec::new();
                 for (_, data) in self.data_queue_receiver.as_ref().unwrap().iter() {
                     unprocessed_datas.push(data.clone());
                 }
                 for (_, data) in executable_queue_receiver.iter() {
                     unprocessed_datas.push(data.clone());
                 }
-                let unprocessed_data = json!(unprocessed_datas);
-                self.autosave_save(&unprocessed_data, start_time);
+                for data in ctrlc_datas.iter() {
+                    unprocessed_datas.push(data.clone());
+                }
+                for data in run_ctrlc_datas.iter() {
+                    unprocessed_datas.push(data.clone());
+                }
+                let unprocessed_datas_json = json!(unprocessed_datas);
+                self.autosave_save(&unprocessed_datas_json, start_time);
             }
             drop(executable_queue_receiver);
-            self.gather_data(run_data_array, compile_error_datas)
+            self.gather_data(run_datas, compile_error_datas, unprocessed_datas)
         }
     }
 
@@ -694,7 +731,7 @@ impl Parabuilder {
         build_pb: ProgressBar,
         run_pb: ProgressBar,
         stop_flag: Arc<AtomicBool>,
-    ) -> std::thread::JoinHandle<(JsonValue, Vec<JsonValue>)> {
+    ) -> std::thread::JoinHandle<(JsonValue, Vec<JsonValue>, JsonValue)> {
         let template_path = self.project_path.join(&self.template_file);
         let targets_path: Vec<PathBuf> = self
             .target_files
@@ -724,6 +761,7 @@ impl Parabuilder {
         }
         let mut run_data = JsonValue::Null;
         let mut compile_error_datas = Vec::new();
+        let mut ctrlc_data = JsonValue::Null;
         let run_bash_script = self.run_bash_script.clone();
         let enable_cppflags = self.enable_cppflags;
         let disable_progress_bar = self.disable_progress_bar;
@@ -761,32 +799,42 @@ impl Parabuilder {
                 let output = output.output();
                 build_pb.inc(1);
                 if output.is_err() || output.is_ok() && !output.as_ref().unwrap().status.success() {
-                    if compilation_error_handling_method == CompliationErrorHandlingMethod::Panic {
-                        if let Ok(output) = output {
-                            panic!(
-                                "Compilation script failed in data: {:?} with output: {:?}",
-                                data, output
-                            );
-                        } else {
-                            panic!("Compilation script failed in data: {:?}", data);
-                        }
+                    if stop_flag.load(Ordering::Relaxed) {
+                        // current data should be saved, ignore here
                     } else {
-                        if !matches!(run_method, RunMethod::No) {
-                            run_pb.inc(1);
-                        }
                         if compilation_error_handling_method
-                            == CompliationErrorHandlingMethod::Collect
+                            == CompliationErrorHandlingMethod::Panic
                         {
-                            compile_error_datas.push(data.clone());
-                            continue;
-                        } else if compilation_error_handling_method
-                            == CompliationErrorHandlingMethod::Ignore
-                        {
-                            continue;
+                            if let Ok(output) = output {
+                                panic!(
+                                    "Compilation script failed in data: {:?} with output: {:?}",
+                                    data, output
+                                );
+                            } else {
+                                panic!("Compilation script failed in data: {:?}", data);
+                            }
                         } else {
-                            panic!("Compilation error handling method not implemented");
+                            if !matches!(run_method, RunMethod::No) {
+                                run_pb.inc(1);
+                            }
+                            match compilation_error_handling_method {
+                                CompliationErrorHandlingMethod::Collect => {
+                                    compile_error_datas.push(data.clone());
+                                    continue;
+                                }
+                                CompliationErrorHandlingMethod::Ignore => {
+                                    continue;
+                                }
+                                CompliationErrorHandlingMethod::Panic => {
+                                    panic!("Compilation script failed in data: {:?}", data);
+                                }
+                            }
                         }
                     }
+                }
+                if stop_flag.load(Ordering::Relaxed) {
+                    ctrlc_data = data;
+                    break;
                 }
                 match run_method {
                     RunMethod::InPlace => {
@@ -795,6 +843,7 @@ impl Parabuilder {
                             &run_bash_script,
                             &data,
                             &mut run_data,
+                            &stop_flag,
                         )
                         .unwrap();
                         sp.set_message(serde_json::to_string_pretty(&last_data).unwrap());
@@ -817,17 +866,18 @@ impl Parabuilder {
                                 std::fs::write(&to_metadata_path, data.to_string()).unwrap();
                             }
                             RunMethod::OutOfPlace(_) | RunMethod::Exclusive(_) => {
-                                executable_queue_sender.send((i, data)).unwrap();
+                                executable_queue_sender.send((i, data.clone())).unwrap();
                             }
                             _ => panic!("Unexpected run method"),
                         }
                     }
                 }
                 if stop_flag.load(Ordering::Relaxed) {
+                    ctrlc_data = data;
                     break;
                 }
             }
-            (run_data, compile_error_datas)
+            (run_data, compile_error_datas, ctrlc_data)
         })
     }
 
@@ -837,7 +887,7 @@ impl Parabuilder {
         executable_queue_receiver: Receiver<(usize, JsonValue)>,
         run_pb: ProgressBar,
         stop_flag: Arc<AtomicBool>,
-    ) -> std::thread::JoinHandle<JsonValue> {
+    ) -> std::thread::JoinHandle<(JsonValue, JsonValue)> {
         let targets_path: Vec<PathBuf> = self
             .target_files
             .iter()
@@ -851,6 +901,7 @@ impl Parabuilder {
         let run_bash_script = self.run_bash_script.clone();
         let temp_target_path_dir = self.temp_target_path_dir.clone();
         std::thread::spawn(move || {
+            let mut ctrlc_data = JsonValue::Null;
             let sp = Self::add_spinner2(
                 disable_progress_bar,
                 &mpb,
@@ -872,15 +923,17 @@ impl Parabuilder {
                     &run_bash_script,
                     &data,
                     &mut run_data,
+                    &stop_flag,
                 )
                 .unwrap();
-                sp.set_message(serde_json::to_string_pretty(&last_data).unwrap());
-                run_pb.inc(1);
                 if stop_flag.load(Ordering::Relaxed) {
+                    ctrlc_data = data;
                     break;
                 }
+                sp.set_message(serde_json::to_string_pretty(&last_data).unwrap());
+                run_pb.inc(1);
             }
-            run_data
+            (run_data, ctrlc_data)
         })
     }
 
@@ -888,23 +941,25 @@ impl Parabuilder {
         &self,
         run_data_array: Vec<JsonValue>,
         compile_error_datas: Vec<JsonValue>,
-    ) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
+        unprocessed_datas: Vec<JsonValue>,
+    ) -> Result<(JsonValue, Vec<JsonValue>, Vec<JsonValue>), Box<dyn Error>> {
         let run_data_array: Vec<JsonValue> = run_data_array
             .into_iter()
             .filter(|item| !item.is_null())
             .collect();
-        if self.run_method == RunMethod::No {
-            return Ok((JsonValue::Null, compile_error_datas));
+        let run_datas = if self.run_method == RunMethod::No {
+            JsonValue::Null
         } else if self.auto_gather_array_data && run_data_array.iter().all(|item| item.is_array()) {
             let mut run_data = Vec::new();
             for run_data_item in run_data_array {
                 run_data.extend(run_data_item.as_array().unwrap().iter().cloned());
             }
-            Ok((JsonValue::Array(run_data), compile_error_datas))
+            JsonValue::Array(run_data)
         } else {
             // just return array json
-            Ok((JsonValue::Array(run_data_array), compile_error_datas))
-        }
+            JsonValue::Array(run_data_array)
+        };
+        Ok((run_datas, compile_error_datas, unprocessed_datas))
     }
 
     fn add_progress_bar<S: Into<String>, F: Into<Cow<'static, str>>>(
@@ -1078,13 +1133,14 @@ mod tests {
 
         parabuilder.set_datas(datas).unwrap();
         parabuilder.init_workspace().unwrap();
-        let (run_data, compile_error_datas) = parabuilder.run().unwrap();
+        let (run_data, compile_error_datas, unprocessed_datas) = parabuilder.run().unwrap();
         assert!(
             compile_error_datas == vec![error_data],
             "got: {:?} {:?}",
             run_data,
             compile_error_datas
         );
+        assert!(unprocessed_datas.is_empty());
         if matches!(run_method, RunMethod::No) {
             assert!(run_data.is_null(), "got: {}", run_data);
             for i in 0..size {

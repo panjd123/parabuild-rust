@@ -195,6 +195,15 @@ fn _command_platform_specific_behavior_check() {
     std::fs::remove_dir("tmp").unwrap();
 }
 
+fn is_empty(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::Null => true,
+        JsonValue::Array(arr) => arr.is_empty(),
+        JsonValue::Object(map) => map.is_empty(),
+        _ => false,
+    }
+}
+
 fn main() {
     let args = Cli::parse();
     let data = if let Some(data_str) = args.data {
@@ -315,7 +324,11 @@ fn main() {
     let datas_len = datas.len();
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    let (run_data, compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
+    let (run_data, compile_error_datas, unprocessed_datas): (
+        JsonValue,
+        Vec<JsonValue>,
+        Vec<JsonValue>,
+    ) = parabuilder.run().unwrap();
 
     if let Some(output_file) = args.output_file {
         std::fs::write(
@@ -344,11 +357,16 @@ fn main() {
         }
     }
 
+    if !unprocessed_datas.is_empty() {
+        println!("Unprocessed: {}", unprocessed_datas.len());
+        println!();
+    }
+
     println!("Compilation Summary");
     println!("===================");
     println!(
         "Success: {}\tFailed: {}",
-        datas_len - compile_error_datas.len(),
+        datas_len - unprocessed_datas.len() - compile_error_datas.len(),
         compile_error_datas.len()
     );
     println!();
@@ -368,7 +386,11 @@ fn main() {
         let failed = run_data.as_array().unwrap().len() - success;
         println!("Success: {}\tFailed: {}", success, failed);
     } else {
-        println!("Unknown run_data format, please check the output")
+        if is_empty(&run_data) {
+            println!("Empty run_data");
+        } else {
+            println!("Unknown run_data format, please check the output");
+        }
     }
 
     // write compile error datas to current directory
