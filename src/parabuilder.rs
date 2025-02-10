@@ -582,15 +582,16 @@ impl Parabuilder {
             ProgressBar::hidden()
         };
         let stop_flag = Arc::new(AtomicBool::new(false));
-        ctrlc::set_handler({
-            let stop_flag = Arc::clone(&stop_flag);
-            move || {
-                println!("Ctrl-C received, stopping...");
-                stop_flag.store(true, Ordering::Relaxed);
-            }
-        })
-        .expect("Error setting Ctrl-C handler");
-
+        if !cfg!(test) {
+            ctrlc::set_handler({
+                let stop_flag = Arc::clone(&stop_flag);
+                move || {
+                    println!("Ctrl-C received, stopping...");
+                    stop_flag.store(true, Ordering::Relaxed);
+                }
+            })
+            .expect("Error setting Ctrl-C handler");
+        }
         build_pb.tick();
         run_pb.tick();
         let spawn_build_workers = || {
