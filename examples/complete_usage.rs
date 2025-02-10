@@ -36,6 +36,9 @@ fn main() {
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
     let (run_data, compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
-    println!("run_data: {:?}", run_data);
+    println!(
+        "run_data: {}",
+        serde_json::to_string_pretty(&run_data).unwrap()
+    );
     println!("compile_error_datas: {:?}", compile_error_datas);
 }

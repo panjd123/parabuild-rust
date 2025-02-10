@@ -3,5 +3,6 @@
 # test temporary files
 /workspaces*
 /tests/workspaces*
+/.parabuild
 
 /.vscode

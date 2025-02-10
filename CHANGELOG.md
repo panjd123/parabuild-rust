@@ -1,3 +1,11 @@
+# 0.3.0
+
+- [TODO] Supports interruption and resumption from the last checkpoint
+- [TODO] Supports periodic saving of current progress. Use the `--autosave-interval` parameter to set the interval, such as 1s, 1m, 1h, or 1d
+- Add the `--no-init` parameter, which is equivalent to passing an empty string to the `--init-bash-script` parameter
+- By default, output compilation error data to `compile_error_datas.json`
+- Optimize progress display information
+
 # 0.2.10
 
 - Fix spinner showed when not run in-place

@@ -225,6 +225,14 @@ Options:
 
 For more advanced usage, please refer to the [documentation](https://docs.rs/parabuild) and [complete example](examples/complete_usage.rs).
 
+### Example
+
+[examples/complete_usage.rs](examples/complete_usage.rs)
+
+```bash
+cargo run --example complete_usage
+```
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

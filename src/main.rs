@@ -23,7 +23,7 @@ struct Cli {
     template_file: Option<PathBuf>,
 
     /// where to store the workspaces, executables, etc.
-    #[arg(short, long, default_value = "workspaces")]
+    #[arg(short, long, default_value = ".parabuild/workspaces")]
     workspaces_path: PathBuf,
 
     /// json format data
@@ -153,8 +153,15 @@ struct Cli {
     #[arg(long)]
     format_output: bool,
 
+    /// do not run the init bash script, same as `--init-bash-script ""`
     #[arg(long)]
     no_init: bool,
+
+    #[arg(long, default_value = "1m")]
+    autosave_interval: String,
+
+    #[arg(long, default_value = ".parabuild/autosave")]
+    autosave_dir: PathBuf,
 }
 
 fn _command_platform_specific_behavior_check() {
@@ -228,6 +235,10 @@ fn main() {
         }
     };
 
+    let autosave_interval_secs = humantime::parse_duration(&args.autosave_interval)
+        .expect("invalid autosave interval")
+        .as_secs();
+
     let mut parabuilder = Parabuilder::new(
         args.project_path,
         args.workspaces_path,
@@ -239,6 +250,8 @@ fn main() {
     .no_cache(args.no_cache)
     .without_rsync(args.without_rsync)
     .enable_cppflags(args.makefile)
+    .autosave_interval(autosave_interval_secs)
+    .autosave_dir(args.autosave_dir)
     .compilation_error_handling_method(if args.panic_on_compile_error {
         CompliationErrorHandlingMethod::Panic
     } else {

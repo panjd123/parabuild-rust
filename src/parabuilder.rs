@@ -4,6 +4,7 @@ use crate::filesystem_utils::{
     wait_until_file_ready,
 };
 use crate::handlebars_helper::*;
+use chrono::Local;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use handlebars::Handlebars;
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
@@ -15,6 +16,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -77,6 +82,8 @@ pub struct Parabuilder {
     no_cache: bool,
     without_rsync: bool,
     enable_cppflags: bool,
+    autosave_interval: u64,
+    autosave_dir: PathBuf,
 }
 
 fn run_func_data_pre_(
@@ -244,6 +251,8 @@ impl Parabuilder {
             no_cache: false,
             without_rsync: false,
             enable_cppflags: false,
+            autosave_interval: 0,
+            autosave_dir: PathBuf::from(".parabuild/autosave"),
         }
     }
 
@@ -336,6 +345,16 @@ impl Parabuilder {
 
     pub fn enable_cppflags(mut self, enable_cppflags: bool) -> Self {
         self.enable_cppflags = enable_cppflags;
+        self
+    }
+
+    pub fn autosave_interval(mut self, autosave_interval: u64) -> Self {
+        self.autosave_interval = autosave_interval;
+        self
+    }
+
+    pub fn autosave_dir<S: AsRef<Path>>(mut self, autosave_dir: S) -> Self {
+        self.autosave_dir = autosave_dir.as_ref().to_path_buf();
         self
     }
 
@@ -500,8 +519,45 @@ impl Parabuilder {
         Ok(())
     }
 
+    /// Load autosave data
+    pub fn autosave_load(&self, start_time: String) -> Option<JsonValue> {
+        let autosave_dir = self.autosave_dir.join(start_time);
+        if !autosave_dir.exists() {
+            return None;
+        }
+        let autosave_file = autosave_dir.join("unprocessed_data.json");
+        if !autosave_file.exists() {
+            return None;
+        }
+        let autosave_file = std::fs::File::open(&autosave_file).unwrap();
+        let data: JsonValue = serde_json::from_reader(autosave_file).unwrap();
+        Some(data)
+    }
+
+    /// Save autosave data
+    pub fn autosave_save(&self, data: &JsonValue, start_time: String) {
+        // 包含当前时间的文件名
+        let autosave_dir = self.autosave_dir.join(start_time);
+        if !autosave_dir.exists() {
+            std::fs::create_dir_all(&autosave_dir).expect("Failed to create autosave dir");
+        }
+        let autosave_file = autosave_dir.join("unprocessed_data.json");
+        let autosave_file1 = autosave_dir.join("unprocessed_data.json.1");
+        if autosave_file.exists() {
+            std::fs::rename(&autosave_file, &autosave_file1)
+                .expect("Failed to rename existing autosave file");
+        }
+        let mut autosave_file =
+            std::fs::File::create(&autosave_file).expect("Failed to create autosave file");
+        autosave_file
+            .write_all(serde_json::to_string(data).unwrap().as_bytes())
+            .expect("Failed to write autosave file");
+    }
+
     /// run the build system
     pub fn run(&self) -> Result<(JsonValue, Vec<JsonValue>), Box<dyn Error>> {
+        let start_time = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        println!("Start from: {}", start_time);
         if !self.data_queue_receiver.is_some() {
             return Err("Data queue receiver is not initialized".into());
         }
@@ -525,6 +581,16 @@ impl Parabuilder {
         } else {
             ProgressBar::hidden()
         };
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        ctrlc::set_handler({
+            let stop_flag = Arc::clone(&stop_flag);
+            move || {
+                println!("Ctrl-C received, stopping...");
+                stop_flag.store(true, Ordering::Relaxed);
+            }
+        })
+        .expect("Error setting Ctrl-C handler");
+
         build_pb.tick();
         run_pb.tick();
         let spawn_build_workers = || {
@@ -535,12 +601,13 @@ impl Parabuilder {
                     executable_queue_sender.clone(),
                     build_pb.clone(),
                     run_pb.clone(),
+                    Arc::clone(&stop_flag),
                 );
                 build_handles.push(build_handle);
             }
             drop(executable_queue_sender);
         };
-        let spawn_run_workers = || {
+        let mut spawn_run_workers = || {
             let run_workers = match self.run_method {
                 RunMethod::OutOfPlace(run_workers) => run_workers,
                 RunMethod::Exclusive(run_workers) => run_workers,
@@ -552,10 +619,11 @@ impl Parabuilder {
                     workspace_path,
                     executable_queue_receiver.clone(),
                     run_pb.clone(),
+                    Arc::clone(&stop_flag),
                 );
                 run_handles.push(run_handle);
             }
-            drop(executable_queue_receiver);
+            // drop(executable_queue_receiver);
         };
         spawn_build_workers();
         drop(build_pb);
@@ -574,6 +642,14 @@ impl Parabuilder {
                 .into_iter()
                 .map(|handle| handle.join().unwrap())
                 .collect();
+            if stop_flag.load(Ordering::Relaxed) {
+                let mut unprocessed_datas: Vec<JsonValue> = Vec::new();
+                for (_, data) in self.data_queue_receiver.as_ref().unwrap().iter() {
+                    unprocessed_datas.push(data.clone());
+                }
+                let unprocessed_data = json!(unprocessed_datas);
+                self.autosave_save(&unprocessed_data, start_time);
+            }
             self.gather_data(run_data_array, compile_error_datas)
         } else {
             if matches!(self.run_method, RunMethod::OutOfPlace(_)) {
@@ -594,6 +670,18 @@ impl Parabuilder {
                     .map(|handle| handle.join().unwrap())
                     .collect();
             } // else run InPlace or No, use run_data_array from build workers
+            if stop_flag.load(Ordering::Relaxed) {
+                let mut unprocessed_datas: Vec<JsonValue> = Vec::new();
+                for (_, data) in self.data_queue_receiver.as_ref().unwrap().iter() {
+                    unprocessed_datas.push(data.clone());
+                }
+                for (_, data) in executable_queue_receiver.iter() {
+                    unprocessed_datas.push(data.clone());
+                }
+                let unprocessed_data = json!(unprocessed_datas);
+                self.autosave_save(&unprocessed_data, start_time);
+            }
+            drop(executable_queue_receiver);
             self.gather_data(run_data_array, compile_error_datas)
         }
     }
@@ -604,6 +692,7 @@ impl Parabuilder {
         executable_queue_sender: Sender<(usize, JsonValue)>,
         build_pb: ProgressBar,
         run_pb: ProgressBar,
+        stop_flag: Arc<AtomicBool>,
     ) -> std::thread::JoinHandle<(JsonValue, Vec<JsonValue>)> {
         let template_path = self.project_path.join(&self.template_file);
         let targets_path: Vec<PathBuf> = self
@@ -733,6 +822,9 @@ impl Parabuilder {
                         }
                     }
                 }
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
             }
             (run_data, compile_error_datas)
         })
@@ -743,6 +835,7 @@ impl Parabuilder {
         workspace_path: PathBuf,
         executable_queue_receiver: Receiver<(usize, JsonValue)>,
         run_pb: ProgressBar,
+        stop_flag: Arc<AtomicBool>,
     ) -> std::thread::JoinHandle<JsonValue> {
         let targets_path: Vec<PathBuf> = self
             .target_files
@@ -782,6 +875,9 @@ impl Parabuilder {
                 .unwrap();
                 sp.set_message(serde_json::to_string_pretty(&last_data).unwrap());
                 run_pb.inc(1);
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
             }
             run_data
         })
@@ -827,7 +923,7 @@ impl Parabuilder {
             ProgressBar::new(total)
                 .with_message(message.into())
                 .with_style(sty)
-                .with_finish(ProgressFinish::WithMessage(finish_message.into())),
+                .with_finish(ProgressFinish::AbandonWithMessage(finish_message.into())),
         )
     }
 
