@@ -44,7 +44,11 @@
 //!     );
 //!     parabuilder.set_datas(datas).unwrap();
 //!     parabuilder.init_workspace().unwrap();
-//!     let (run_data, _compile_error_datas): (JsonValue, Vec<JsonValue>) = parabuilder.run().unwrap();
+//!     let (run_data, _compile_error_datas, _unprocessed_datas): (
+//!         JsonValue,
+//!         Vec<JsonValue>,
+//!         Vec<JsonValue>,
+//!     ) = parabuilder.run().unwrap();
 //!     println!("{}", to_string_pretty(&run_data).unwrap());
 //!     /*
 //!     [
@@ -207,8 +211,7 @@
 //! - Use handlebars template language to generate source file.
 //! - Ignore `.gitignore` files in the project, which may speed up the copying process.
 //! - Support multi-threading compilation/executing, these two parts can share threads, meaning they can be executed immediately after compilation, or they can be separated. For example, four threads can be used for compilation and one thread for execution. This is suitable for scenarios where only one executable file should be active in the system, such as when testing GPU performance. In this case, multiple CPU threads compile in the background while one CPU thread is responsible for execution.
-//! - TODO: Support better `force exclusive run`, which means only one executable thread is running, no compilation thread is running.
-//! - TODO: Support multiple template files.
+//! - Support multiple template files.
 //!
 //! # Notes
 //!

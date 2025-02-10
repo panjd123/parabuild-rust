@@ -1,7 +1,7 @@
 jq -n --argjson n 100 '[{"N": "a"}] + [range(1; $n + 1) | {N: .}]' > datas.json
 ./target/release/parabuild tests/example_run_time_consuming_project build/main --template-file src/main.cpp --data-file datas.json -j 2 -J 2 --output-file output.json > /dev/null 2>&1 &
 PID=$!
-sleep 5
+sleep 10
 kill -SIGINT $PID
 unprocessed_len=$(jq length "$(ls -d .parabuild/autosave/*/ | sort -r | head -n 1)unprocessed_data.json")
 run_len=$(jq length output.json)
