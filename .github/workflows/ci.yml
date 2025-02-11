@@ -9,8 +9,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo test --all-features
-      - name: Ctrl-C Test
-        run: |
-          cargo build --release
-          ./tests/ctrl-c_test.sh
+      - name: Cargo Test
+        run: cargo test --all-features
+      - name: Release Build
+        run: cargo build --release
+      - name: ctrl-c test
+        run: ./tests/ctrl-c_test.sh
+      - name: autosave test
+        run: ./tests/autosave_test.sh

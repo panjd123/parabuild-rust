@@ -1,9 +1,11 @@
 use clap::Parser;
 use parabuild::{CompliationErrorHandlingMethod, Parabuilder, RunMethod};
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
+use std::vec;
 use std::{path::PathBuf, str::FromStr};
 
 #[derive(Parser)]
@@ -157,7 +159,15 @@ struct Cli {
     #[arg(long)]
     no_init: bool,
 
-    #[arg(long, default_value = "1m")]
+    /// continue from which under the `autosave_dir`
+    ///
+    /// e.g. `2021-08-01_12-00-00`
+    ///
+    /// left empty to start from the latest one (--continue)
+    #[arg(long = "continue", num_args = 0..=1, default_missing_value = "")]
+    continue_from: Option<String>,
+
+    #[arg(long = "autosave-interval", long = "autosave", default_value = "1m")]
     autosave_interval: String,
 
     #[arg(long, default_value = ".parabuild/autosave")]
@@ -321,14 +331,37 @@ fn main() {
         parabuilder = parabuilder.run_method(RunMethod::InPlace);
     }
 
+    let (last_run_datas, last_comile_error_datas, last_processed_data_ids) =
+        match args.continue_from {
+            Some(cont) => parabuilder.autosave_load(cont),
+            None => (JsonValue::Null, vec![], vec![]),
+        };
+
+    let processed_data_ids_set: HashSet<usize> =
+        last_processed_data_ids.clone().into_iter().collect();
+
     let datas_len = datas.len();
-    parabuilder.set_datas(datas).unwrap();
+    // parabuilder.set_datas(datas).unwrap();
+    parabuilder
+        .set_datas_with_processed_data_ids_set(datas, processed_data_ids_set)
+        .unwrap();
     parabuilder.init_workspace().unwrap();
-    let (run_data, compile_error_datas, unprocessed_datas): (
+    let (mut run_data, mut compile_error_datas, mut processed_data_ids): (
         JsonValue,
         Vec<JsonValue>,
-        Vec<JsonValue>,
+        Vec<usize>,
     ) = parabuilder.run().unwrap();
+
+    compile_error_datas.extend(last_comile_error_datas);
+    processed_data_ids.extend(last_processed_data_ids);
+
+    (run_data, compile_error_datas, processed_data_ids) = parabuilder
+        .gather_data(
+            vec![run_data, last_run_datas],
+            compile_error_datas,
+            processed_data_ids,
+        )
+        .unwrap();
 
     if let Some(output_file) = args.output_file {
         std::fs::write(
@@ -357,8 +390,12 @@ fn main() {
         }
     }
 
-    if !unprocessed_datas.is_empty() {
-        println!("Unprocessed: {}", unprocessed_datas.len());
+    let processed_data_len = processed_data_ids.len();
+
+    println!();
+
+    if processed_data_len != datas_len {
+        println!("Unprocessed: {}", datas_len - processed_data_len);
         println!();
     }
 
@@ -366,7 +403,7 @@ fn main() {
     println!("===================");
     println!(
         "Success: {}\tFailed: {}",
-        datas_len - unprocessed_datas.len() - compile_error_datas.len(),
+        processed_data_ids.len() - compile_error_datas.len(),
         compile_error_datas.len()
     );
     println!();

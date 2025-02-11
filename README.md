@@ -217,7 +217,14 @@ Options:
       --no-init
           do not run the init bash script, same as `--init-bash-script ""`
 
-      --autosave-interval <AUTOSAVE_INTERVAL>
+      --continue [<CONTINUE_FROM>]
+          continue from which under the `autosave_dir`
+          
+          e.g. `2021-08-01_12-00-00`
+          
+          left empty to start from the latest one (--continue)
+
+      --autosave <AUTOSAVE_INTERVAL>
           [default: 1m]
 
       --autosave-dir <AUTOSAVE_DIR>

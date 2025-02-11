@@ -35,10 +35,10 @@ fn main() {
     // let sender = parabuilder.get_data_queue_sender().unwrap();
     parabuilder.set_datas(datas).unwrap();
     parabuilder.init_workspace().unwrap();
-    let (run_data, compile_error_datas, _unprocessed_datas): (
+    let (run_data, compile_error_datas, _processed_data_ids): (
         JsonValue,
         Vec<JsonValue>,
-        Vec<JsonValue>,
+        Vec<usize>,
     ) = parabuilder.run().unwrap();
     println!(
         "run_data: {}",

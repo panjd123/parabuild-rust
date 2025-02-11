@@ -44,10 +44,10 @@
 //!     );
 //!     parabuilder.set_datas(datas).unwrap();
 //!     parabuilder.init_workspace().unwrap();
-//!     let (run_data, _compile_error_datas, _unprocessed_datas): (
+//!     let (run_data, _compile_error_datas, _processed_data_ids): (
 //!         JsonValue,
 //!         Vec<JsonValue>,
-//!         Vec<JsonValue>,
+//!         Vec<usize>,
 //!     ) = parabuilder.run().unwrap();
 //!     println!("{}", to_string_pretty(&run_data).unwrap());
 //!     /*

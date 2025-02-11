@@ -1,7 +1,8 @@
 # 0.3.0
 
 - Support interruption (CTRL+C)
-- [TODO] Support periodic saving of current progress. Use the `--autosave-interval` parameter to set the interval, such as 1s, 1m, 1h, or 1d
+- Support periodic saving of current progress. Use the `--autosave-interval` parameter to set the interval, such as 1s, 1m, 1h, or 1d
+- Support continue from the time of interruption/autosave. Further information can be found in `parabuild --help`
 - Add the `--no-init` parameter, which is equivalent to passing an empty string to the `--init-bash-script` parameter
 - By default, output compilation error data to `compile_error_datas.json`
 - Optimize progress display information
