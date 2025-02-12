@@ -236,7 +236,7 @@ Options:
           left empty to start from the latest one (--continue)
 
       --autosave <AUTOSAVE_INTERVAL>
-          [default: 1m]
+          [default: 30m]
 
       --autosave-dir <AUTOSAVE_DIR>
           [default: .parabuild/autosave]

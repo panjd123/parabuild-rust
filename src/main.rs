@@ -167,7 +167,7 @@ struct Cli {
     #[arg(long = "continue", num_args = 0..=1, default_missing_value = "")]
     continue_from: Option<String>,
 
-    #[arg(long = "autosave-interval", long = "autosave", default_value = "1m")]
+    #[arg(long = "autosave-interval", long = "autosave", default_value = "30m")]
     autosave_interval: String,
 
     #[arg(long, default_value = ".parabuild/autosave")]

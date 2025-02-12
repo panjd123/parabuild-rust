@@ -1,3 +1,9 @@
+# 0.3.1
+
+- Change the default interval for autosave to 30 minutes
+- Update the documentation
+- `cargo update`
+
 # 0.3.0
 
 - Support interruption (CTRL+C)
