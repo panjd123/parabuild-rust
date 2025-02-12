@@ -32,26 +32,13 @@ jobs:
           /^#/ {flag=0}
           flag && NF
         ' CHANGELOG.md)
-        echo "::set-output name=content::$CHANGELOG_CONTENT"
+        echo "$CHANGELOG_CONTENT"
+        echo "content=$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
 
-    - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create and Upload Release
+      uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.ref }}
-        release_name: ${{ github.ref }}
         body: ${{ steps.changelog.outputs.content }}
-        draft: false
+        files: target/release/parabuild
         prerelease: false
-
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: target/release/parabuild
-        asset_name: parabuild
-        asset_content_type: application/octet-stream
+        draft: false
