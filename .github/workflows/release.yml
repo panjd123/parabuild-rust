@@ -32,13 +32,12 @@ jobs:
           /^#/ {flag=0}
           flag && NF
         ' CHANGELOG.md)
-        echo "$CHANGELOG_CONTENT"
-        echo "content=$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
+        echo "$CHANGELOG_CONTENT" > current_version_changelog.md
 
     - name: Create and Upload Release
       uses: softprops/action-gh-release@v2
       with:
-        body: ${{ steps.changelog.outputs.content }}
+        body_path: current_version_changelog.md
         files: target/release/parabuild
         prerelease: false
         draft: false
