@@ -211,11 +211,11 @@
 //! - Use handlebars template language to generate source file.
 //! - Ignore `.gitignore` files in the project, which may speed up the copying process.
 //! - Support multi-threading compilation/executing, these two parts can share threads, meaning they can be executed immediately after compilation, or they can be separated. For example, four threads can be used for compilation and one thread for execution. This is suitable for scenarios where only one executable file should be active in the system, such as when testing GPU performance. In this case, multiple CPU threads compile in the background while one CPU thread is responsible for execution.
-//! - Support multiple template files.
+//! - [TODO] Support multiple template files.
 //!
 //! # Notes
 //!
-//! Due to the fact that system time is not monotonous , when the program executes quickly, there may be older timestamps in subsequent file modifications, which may cause make to not be able to track program modifications correctly. Please be aware that when writing compilation scripts, try to forcefully ignore timestamp compilation.
+//! Due to the fact that system time is not monotonous , when the program executes quickly, there may be older timestamps in subsequent file modifications, which may cause `make` to not be able to track program modifications correctly. Please be aware that when writing compilation scripts, try to forcefully ignore timestamp compilation.
 //!
 //! [SystemTime](https://doc.rust-lang.org/std/time/struct.SystemTime.html):
 //!

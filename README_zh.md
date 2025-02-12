@@ -8,34 +8,34 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Parabuild is a tool written in Rust that helps you compile and execute C++/CUDA projects with different compile-time parameters in parallel. This is particularly useful for single-file projects that heavily use templates and require testing multiple sets of template parameters. In such cases, `make -j` may not achieve optimal performance, but Parabuild can leverage the power of multi-core CPUs (and also supports multiple GPUs, such as MIG or multi-card setups).
+Parabuild 是一个用 Rust 编写的工具，它可以帮助你在需要编译多份不同编译期参数的 C++/CUDA 项目时，以并行的方式编译这些项目并执行，常见的情况是一个大量使用模板的单文件项目，你需要尝试多组模板参数时，`make -j` 无法达到最佳性能，这时候你可以使用 Parabuild 来发挥多核 CPU 的性能（还支持多 GPU，比如 MIG 或多卡）。
 
-Parabuild provides both a command-line tool and a corresponding Rust library, allowing you to use whichever suits your needs. This README primarily introduces the usage of the command-line tool.
+Parabuild 同时提供了命令行工具和对应的 Rust 库，你可以根据需要使用，本 README 主要介绍命令行工具的使用方法。
 
-## Command Line Quick Start
+## 命令行工具快速开始
 
-The following is an example of how to use parabuild-rust cli to compile a C++ project.
+以下是使用 `parabuild` 加速一个 C++ 项目调试的示例。
 
-If you are new to rust-lang, you can install it by running the following command:
+如果你是第一次接触 Rust，你可以通过以下命令安装 Rust：
 
 ```shell
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-Then you can install parabuild-rust by running the following command:
+然后你可以通过以下命令安装 parabuild-rust：
 
 ```shell
 cargo install parabuild
 ```
 
-Install `lsof` and `rsync`, which are required by parabuild-rust:
+你还需要安装 `lsof` 和 `rsync`，这两个工具是 parabuild-rust 所需要的：
 
 ```
 sudo apt update
 sudo apt install -y lsof rsync
 ```
 
-We use [handlebars templating language](https://handlebarsjs.com/) to generate source file, here is an example:
+我们使用 [handlebars 模板语言](https://handlebarsjs.com/) 来生成源文件，这里是一个示例：
 
 ```cpp
 // src/main.cpp
@@ -53,7 +53,7 @@ int main(){
 }
 ```
 
-We will use this file to organize a C++ project like this:
+我们将使用这个文件来组织一个 C++ 项目，目录结构如下：
 
 ```shell
 example_project
@@ -62,7 +62,7 @@ example_project
 │   └── main.cpp
 ```
 
-Suppose we want to compile the project with different `N` values, we can use the following command, where you can use `xxx-bash-script` to specify what needs to be executed during workspace initialization, compilation, and runtime:
+假设我们想要使用不同的 `N` 值编译这个项目，我们可以使用以下命令，你可以使用 `xxx-bash-script` 参数来指定在工作区初始化、编译和运行时分别需要执行的内容：
 
 ```shell
 parabuild \
@@ -76,10 +76,11 @@ parabuild \
     -j 1
 ```
 
-Give it a quick try from scratch by running the following commands:
+你可以使用源码仓库中的示例项目来尝试这个过程：
 
 ```shell
 git clone https://github.com/panjd123/parabuild-rust.git
+
 cd parabuild-rust
 
 cargo run -- \
@@ -89,11 +90,13 @@ cargo run -- \
     --data '[{"N": 10}, {"N": 20}]'
 ```
 
-### Advanced Usage
+命令行工具还提供了大量的自定义参数选项，请查看 `parabuild --help`。
 
-We have many customization options, please check `parabuild --help` for more information.
+### 高级用法
 
-For more advanced usage, please refer to the [documentation](https://docs.rs/parabuild) and [complete example](examples/complete_usage.rs).
+对于更高级的用法，请参考[文档](https://docs.rs/parabuild)和[完整示例](examples/complete_usage.rs)。
+
+文档中提供了最佳实践（如何避免管理两份代码，一份用于 parabuild，一份用于正常开发），[`examples`](examples) 文件夹里还有更多的示例。
 
 ### Help
 
@@ -247,4 +250,4 @@ Options:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+本项目使用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
