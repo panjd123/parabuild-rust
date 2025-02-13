@@ -1,5 +1,12 @@
 # parabuild-rust
 
+<!-- ![logo](./imgs/logo.png) -->
+<div style="text-align: center;">
+  <img src="imgs/logo.png" alt="描述" style="width: 20%;">
+</div>
+
+----
+
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/panjd123/parabuild-rust/ci.yml?style=flat-square&logo=github)](https://github.com/panjd123/parabuild-rust/actions)
 [![Crate informations](https://img.shields.io/crates/v/parabuild.svg?style=flat-square)](https://crates.io/crates/parabuild)
 [![Crates.io MSRV](https://img.shields.io/crates/msrv/parabuild?style=flat-square)](https://crates.io/crates/parabuild)
@@ -11,6 +18,8 @@
 Parabuild is a tool written in Rust that helps you compile and execute C++/CUDA projects with different compile-time parameters in parallel. This is particularly useful for single-file projects that heavily use templates and require testing multiple sets of template parameters. In such cases, `make -j` may not achieve optimal performance, but Parabuild can leverage the power of multi-core CPUs (and also supports multiple GPUs, such as MIG or multi-card setups).
 
 Parabuild provides both a command-line tool and a corresponding Rust library, allowing you to use whichever suits your needs. This README primarily introduces the usage of the command-line tool.
+
+![parabuild](./imgs/parabuild.gif)
 
 ## Command Line Quick Start
 
@@ -69,7 +78,7 @@ parabuild \
     example_project \
     build/main \
     --init-bash-script "cmake -S . -B build" \
-    --compile-bash-script "cmake --build build -B" \
+    --compile-bash-script "cmake --build build -- -B" \
     --run-bash-script "./build/main" \
     --template-file src/main.cpp \
     --data '[{"N": 10}, {"N": 20}]' \

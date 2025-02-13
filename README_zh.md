@@ -1,5 +1,12 @@
 # parabuild-rust
 
+<!-- ![logo](./imgs/logo.png) -->
+<div style="text-align: center;">
+  <img src="imgs/logo.png" alt="描述" style="width: 20%;">
+</div>
+
+----
+
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/panjd123/parabuild-rust/ci.yml?style=flat-square&logo=github)](https://github.com/panjd123/parabuild-rust/actions)
 [![Crate informations](https://img.shields.io/crates/v/parabuild.svg?style=flat-square)](https://crates.io/crates/parabuild)
 [![Crates.io MSRV](https://img.shields.io/crates/msrv/parabuild?style=flat-square)](https://crates.io/crates/parabuild)
@@ -8,9 +15,11 @@
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Parabuild 是一个用 Rust 编写的工具，它可以帮助你在需要编译多份不同编译期参数的 C++/CUDA 项目时，以并行的方式编译这些项目并执行，常见的情况是一个大量使用模板的单文件项目，你需要尝试多组模板参数时，`make -j` 无法达到最佳性能，这时候你可以使用 Parabuild 来发挥多核 CPU 的性能（还支持多 GPU，比如 MIG 或多卡）。
+Parabuild 是一个用 Rust 编写的工具，它可以帮助你在需要编译多份不同编译期参数的 C++/CUDA 项目时，以并行的方式编译这些项目并执行，常见的情况是一个大量使用模板的单文件项目，你需要尝试多组模板参数时，`make -j` 无法达到最佳性能，这时候你可以使用 Parabuild 来发挥多核 CPU 的性能（还支持多 GPU，比如 MIG 或多卡），通常可以得到 10x 以上的性能提升。
 
 Parabuild 同时提供了命令行工具和对应的 Rust 库，你可以根据需要使用，本 README 主要介绍命令行工具的使用方法。
+
+![parabuild](./imgs/parabuild.gif)
 
 ## 命令行工具快速开始
 
@@ -69,7 +78,7 @@ parabuild \
     example_project \
     build/main \
     --init-bash-script "cmake -S . -B build" \
-    --compile-bash-script "cmake --build build -B" \
+    --compile-bash-script "cmake --build build -- -B" \
     --run-bash-script "./build/main" \
     --template-file src/main.cpp \
     --data '[{"N": 10}, {"N": 20}]' \
