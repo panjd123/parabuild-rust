@@ -1,11 +1,7 @@
-# parabuild-rust
+<h1 align="center">
+<img src="imgs/logo.png" width="200">
+</h1><br>
 
-<!-- ![logo](./imgs/logo.png) -->
-<div style="text-align: center;">
-  <img src="imgs/logo.png" alt="描述" style="width: 20%;">
-</div>
-
-----
 
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/panjd123/parabuild-rust/ci.yml?style=flat-square&logo=github)](https://github.com/panjd123/parabuild-rust/actions)
 [![Crate informations](https://img.shields.io/crates/v/parabuild.svg?style=flat-square)](https://crates.io/crates/parabuild)
