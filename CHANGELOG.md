@@ -1,3 +1,7 @@
+# 0.3.2
+
+- Change LICENSE to MPL-2.0
+
 # 0.3.1
 
 - Change the default interval for autosave to 30 minutes
