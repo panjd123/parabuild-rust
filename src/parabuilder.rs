@@ -52,7 +52,17 @@ pub enum RunMethod {
 
 static CUDA_DEVICE_UUIDS: OnceLock<Vec<String>> = OnceLock::new();
 
-fn get_cuda_device_uuid(id: usize) -> Option<String> {
+fn get_cuda_device_uuid_by_id(id: usize, custom_devices: &Option<Vec<String>>) -> Option<String> {
+    // If custom devices are specified, use them
+    if let Some(devices) = custom_devices {
+        if id < devices.len() {
+            return Some(devices[id].clone());
+        } else {
+            return None;
+        }
+    }
+
+    // Otherwise, use auto-detected CUDA devices
     let cuda_device_uuids = CUDA_DEVICE_UUIDS.get_or_init(|| get_cuda_mig_device_uuids());
     if id < cuda_device_uuids.len() {
         Some(cuda_device_uuids[id].clone())
@@ -87,6 +97,7 @@ pub struct Parabuilder {
     autosave_interval: u64,
     autosave_dir: PathBuf,
     continue_from_start_time: Option<String>,
+    gpu_devices: Option<Vec<String>>,
 }
 
 fn run_func_data_pre_(
@@ -94,6 +105,7 @@ fn run_func_data_pre_(
     run_script: &str,
     data: &JsonValue,
     _: &mut JsonValue,
+    gpu_devices: &Option<Vec<String>>,
 ) -> Result<(bool, JsonValue), Box<dyn Error>> {
     let workspace_id = workspace_path
         .file_name()
@@ -108,7 +120,7 @@ fn run_func_data_pre_(
         .arg("-c")
         .arg(run_script)
         .env("PARABUILD_ID", workspace_id);
-    if let Some(mig_uuid) = get_cuda_device_uuid(workspace_id.parse().unwrap()) {
+    if let Some(mig_uuid) = get_cuda_device_uuid_by_id(workspace_id.parse().unwrap(), gpu_devices) {
         output.env("CUDA_VISIBLE_DEVICES", mig_uuid);
     }
     output.current_dir(&workspace_path);
@@ -147,8 +159,9 @@ fn run_func_data_panic_on_error(
     data: &JsonValue,
     run_data: &mut JsonValue,
     stop_flag: &Arc<AtomicBool>,
+    gpu_devices: &Option<Vec<String>>,
 ) -> Result<JsonValue, Box<dyn Error>> {
-    let (success, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data)?;
+    let (success, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data, gpu_devices)?;
     if !success {
         Err(format!("stderr: {}", this_data["stderr"]).as_str())?;
     }
@@ -165,8 +178,9 @@ fn run_func_data_ignore_on_error(
     data: &JsonValue,
     run_data: &mut JsonValue,
     stop_flag: &Arc<AtomicBool>,
+    gpu_devices: &Option<Vec<String>>,
 ) -> Result<JsonValue, Box<dyn Error>> {
-    let (_, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data)?;
+    let (_, this_data) = run_func_data_pre_(workspace_path, run_script, data, run_data, gpu_devices)?;
     if stop_flag.load(Ordering::Relaxed) {
         Ok(JsonValue::Null)
     } else {
@@ -180,6 +194,7 @@ type RunFunc = fn(
     &JsonValue,
     &mut JsonValue,
     &Arc<AtomicBool>,
+    &Option<Vec<String>>,
 ) -> Result<JsonValue, Box<dyn Error>>;
 
 /// Default run function that panics when there is an error
@@ -265,6 +280,7 @@ impl Parabuilder {
             autosave_interval: 0,
             autosave_dir: PathBuf::from(".parabuild/autosave"),
             continue_from_start_time: None,
+            gpu_devices: None,
         }
     }
 
@@ -359,6 +375,14 @@ impl Parabuilder {
 
     pub fn autosave_dir<S: AsRef<Path>>(mut self, autosave_dir: S) -> Self {
         self.autosave_dir = autosave_dir.as_ref().to_path_buf();
+        self
+    }
+
+    /// Set GPU devices to use (can be UUIDs or indices)
+    ///
+    /// e.g. `vec!["0".to_string(), "1".to_string()]` or `vec!["GPU-xxx".to_string(), "GPU-yyy".to_string()]`
+    pub fn gpu_devices(mut self, gpu_devices: Vec<String>) -> Self {
+        self.gpu_devices = Some(gpu_devices);
         self
     }
 
@@ -839,6 +863,7 @@ impl Parabuilder {
         let mpb = self.mpb.clone();
         let autosave_dir = self.autosave_dir.clone();
         let autosave_interval = self.autosave_interval;
+        let gpu_devices = self.gpu_devices.clone();
         std::thread::spawn(move || {
             let uuid = Uuid::new_v4();
             let mut processed_data_ids = Vec::new();
@@ -929,6 +954,7 @@ impl Parabuilder {
                             &data,
                             &mut run_data,
                             &stop_flag,
+                            &gpu_devices,
                         )
                         .unwrap();
                         sp.set_message(serde_json::to_string_pretty(&last_data).unwrap());
@@ -1015,6 +1041,7 @@ impl Parabuilder {
         let temp_target_path_dir = self.temp_target_path_dir.clone();
         let autosave_dir = self.autosave_dir.clone();
         let autosave_interval = self.autosave_interval;
+        let gpu_devices = self.gpu_devices.clone();
         std::thread::spawn(move || {
             let mut processed_data_ids = Vec::new();
             let mut autosave_last_time = Instant::now();
@@ -1040,6 +1067,7 @@ impl Parabuilder {
                     &data,
                     &mut run_data,
                     &stop_flag,
+                    &gpu_devices,
                 )
                 .unwrap();
                 if stop_flag.load(Ordering::Relaxed) {

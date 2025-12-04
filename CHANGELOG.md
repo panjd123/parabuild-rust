@@ -1,3 +1,8 @@
+# 0.3.3
+
+- Add `--gpu-devices` parameter to allow manual specification of GPU devices (supports both UUIDs and indices)
+- Add `gpu_devices()` method to `Parabuilder` for programmatic GPU device configuration
+
 # 0.3.2
 
 - Change LICENSE to MPL-2.0

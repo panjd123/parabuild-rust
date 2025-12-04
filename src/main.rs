@@ -172,6 +172,14 @@ struct Cli {
 
     #[arg(long, default_value = ".parabuild/autosave")]
     autosave_dir: PathBuf,
+
+    /// Specify GPU devices to use (can be UUIDs or indices)
+    ///
+    /// e.g. `--gpu-devices 0,1,2,3` or `--gpu-devices GPU-xxx,GPU-yyy`
+    ///
+    /// If not provided, will auto-detect CUDA MIG devices
+    #[arg(long, value_delimiter = ',')]
+    gpu_devices: Option<Vec<String>>,
 }
 
 fn _command_platform_specific_behavior_check() {
@@ -329,6 +337,10 @@ fn main() {
 
     if args.run_in_place {
         parabuilder = parabuilder.run_method(RunMethod::InPlace);
+    }
+
+    if let Some(gpu_devices) = args.gpu_devices {
+        parabuilder = parabuilder.gpu_devices(gpu_devices);
     }
 
     let (last_run_datas, last_comile_error_datas, last_processed_data_ids) =
